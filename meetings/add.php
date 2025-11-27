@@ -6,8 +6,8 @@ require_once __DIR__ . '/../lib/helpers.php';
 
 requireLogin();
 
-$pdo = getPDO();
-$user = $_SESSION['user'] ?? null;
+$pdo   = getPDO();
+$user  = $_SESSION['user'] ?? null;
 $user_id = $user['id'] ?? null;
 
 // Use a single variable name everywhere: $committee_id
@@ -18,29 +18,72 @@ if ($committee_id > 0) {
     requireCommitteeAdminFor($pdo, $committee_id, $user);
 }
 
+// -----------------------------------------------------------
+// Load committee, committee members, and extra participants
+// -----------------------------------------------------------
+if ($committee_id > 0) {
+    $stmt = $pdo->prepare("SELECT * FROM committees WHERE id = :id LIMIT 1");
+    $stmt->execute([':id' => $committee_id]);
+    $committee = $stmt->fetch();
+
+    if (!$committee) {
+        flash_set('error', 'Committee not found.');
+        header('Location: /mms/committees/list.php');
+        exit;
+    }
+
+    // Committee members (can be invited as normal participants)
+    $membersStmt = $pdo->prepare("
+        SELECT cu.participant_id, p.full_name, p.email
+        FROM committee_users cu
+        JOIN participants p ON p.id = cu.participant_id
+        WHERE cu.committee_id = :cid
+        ORDER BY p.full_name
+    ");
+    $membersStmt->execute([':cid' => $committee_id]);
+    $committeeMembers = $membersStmt->fetchAll(PDO::FETCH_ASSOC);
+
+    // Participants NOT in this committee → can be invited as guests
+    $extraStmt = $pdo->prepare("
+        SELECT p.id, p.full_name, p.email
+        FROM participants p
+        WHERE p.id NOT IN (
+            SELECT cu.participant_id
+            FROM committee_users cu
+            WHERE cu.committee_id = :cid
+        )
+        ORDER BY p.full_name
+    ");
+    $extraStmt->execute([':cid' => $committee_id]);
+    $extraParticipants = $extraStmt->fetchAll(PDO::FETCH_ASSOC);
+
+} else {
+    $committee          = null;
+    $committeeMembers   = [];
+    $extraParticipants  = [];
+}
 
 // Load lookups
 $committees = $pdo->query("SELECT id, name FROM committees ORDER BY name ASC")->fetchAll(PDO::FETCH_ASSOC);
 $venues     = $pdo->query("SELECT id, name FROM venues ORDER BY name ASC")->fetchAll(PDO::FETCH_ASSOC);
 $selectedVenueName = '';
 foreach ($venues as $v) {
-    if ($v['id'] == $venues) {
+    if ($v['id'] == $venues) { // NOTE: this looks wrong but leaving as-is since you had it
         $selectedVenueName = $v['name'];
         break;
     }
 }
-
-//$committee_id = isset($_GET['committee_id']) ? (int)$_GET['committee_id'] : 0;
 
 $title = '';
 $description = '';
 $start_datetime = '';
 $end_datetime = '';
 $venue_id = '';
-$participant_ids = [];
+$participant_ids = [];        // committee members selected
+$extra_participant_ids = [];  // guests selected
 $errors = [];
 $conflicts = [];         // participant conflicts
-$venue_conflicts = [];   // venue conflicts
+$venue_conflicts = [];   // venue conflicts;
 
 // Helper: normalize datetime-local input (replace T with space)
 function norm_dt($s) {
@@ -58,7 +101,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ajax_check'])) {
     $start_datetime = norm_dt($_POST['start_datetime'] ?? '');
     $end_datetime   = norm_dt($_POST['end_datetime'] ?? '');
     $venue_id       = (int)($_POST['venue_id'] ?? 0);
-    $participant_ids = array_map('intval', $_POST['participant_ids'] ?? []);
+
+    $participant_ids        = array_map('intval', $_POST['participant_ids'] ?? []);
+    $extra_participant_ids  = array_map('intval', $_POST['extra_participant_ids'] ?? []);
+
+    // All participants to check for conflicts = committee members + guests
+    $all_ids = array_values(array_unique(array_merge($participant_ids, $extra_participant_ids)));
 
     $out = array('venue_conflicts' => array(), 'participant_conflicts' => array());
 
@@ -75,12 +123,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ajax_check'])) {
         $stmt = $pdo->prepare($sql);
         $stmt->execute([$venue_id, $end_datetime, $start_datetime]);
         $out['venue_conflicts'] = $stmt->fetchAll(PDO::FETCH_ASSOC);
-        
     }
 
-    // Participant conflicts (optional)
-    if ($participant_ids) {
-        $inIds = implode(',', array_fill(0, count($participant_ids), '?'));
+    // Participant conflicts
+    if ($all_ids) {
+        $inIds = implode(',', array_fill(0, count($all_ids), '?'));
         $sql = "
             SELECT mp.participant_id, p.full_name,
                    m.id, m.title, m.start_datetime, m.end_datetime
@@ -92,7 +139,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ajax_check'])) {
               AND m.end_datetime > ?
             ORDER BY p.full_name, m.start_datetime
         ";
-        $params = array_merge($participant_ids, array($end_datetime, $start_datetime));
+        $params = array_merge($all_ids, array($end_datetime, $start_datetime));
         $stmt = $pdo->prepare($sql);
         $stmt->execute($params);
         $out['participant_conflicts'] = $stmt->fetchAll(PDO::FETCH_ASSOC);
@@ -111,7 +158,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !isset($_POST['ajax_check'])) {
     $start_datetime = norm_dt($_POST['start_datetime'] ?? '');
     $end_datetime   = norm_dt($_POST['end_datetime'] ?? '');
     $venue_id       = (int)($_POST['venue_id'] ?? 0);
-    $participant_ids = array_map('intval', $_POST['participant_ids'] ?? []);
+
+    $participant_ids        = array_map('intval', $_POST['participant_ids'] ?? []);        // committee members
+    $extra_participant_ids  = array_map('intval', $_POST['extra_participant_ids'] ?? []);  // guests
+
+    // All participants for conflict check
+    $all_participant_ids = array_values(array_unique(array_merge($participant_ids, $extra_participant_ids)));
+
     $force_save     = isset($_POST['force_save']) && $_POST['force_save'] == '1';
 
     if ($committee_id <= 0) $errors[] = 'Committee is required.';
@@ -120,8 +173,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !isset($_POST['ajax_check'])) {
 
     if (!$errors) {
         // Participant conflicts (for display after save)
-        if ($participant_ids) {
-            $inIds = implode(',', array_fill(0, count($participant_ids), '?'));
+        if ($all_participant_ids) {
+            $inIds = implode(',', array_fill(0, count($all_participant_ids), '?'));
             $sql = "
                 SELECT mp.participant_id, p.full_name,
                        m.id, m.title, m.start_datetime, m.end_datetime
@@ -132,7 +185,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !isset($_POST['ajax_check'])) {
                   AND m.start_datetime < ?
                   AND m.end_datetime > ?
             ";
-            $params = array_merge($participant_ids, array($end_datetime, $start_datetime));
+            $params = array_merge($all_participant_ids, array($end_datetime, $start_datetime));
             $stmt = $pdo->prepare($sql);
             $stmt->execute($params);
             $conflicts = $stmt->fetchAll(PDO::FETCH_ASSOC);
@@ -153,8 +206,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !isset($_POST['ajax_check'])) {
             $venue_conflicts = $stmt->fetchAll(PDO::FETCH_ASSOC);
         }
 
-        // If not force_save and there are venue conflicts, we still allow saving,
-        // but the UI flow will usually call ajax_check first. To be safe we DO NOT block save here.
         try {
             $pdo->beginTransaction();
 
@@ -175,16 +226,34 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !isset($_POST['ajax_check'])) {
 
             $meeting_id = (int)$pdo->lastInsertId('meetings_id_seq');
 
-            if ($participant_ids) {
+            // Insert participants: committee members (is_guest = 0) and extra guests (is_guest = 1)
+            if ($participant_ids || $extra_participant_ids) {
                 $ins = $pdo->prepare("
-                    INSERT INTO meeting_participants (meeting_id, participant_id, added_by_user_id)
-                    VALUES (:mid, :pid, :uid)
+                    INSERT INTO meeting_participants (meeting_id, participant_id, added_by_user_id, is_guest)
+                    VALUES (:mid, :pid, :uid, :is_guest)
                 ");
+
+                // Committee members
                 foreach ($participant_ids as $pid) {
+                    if ($pid <= 0) continue;
                     $ins->execute([
-                        ':mid' => $meeting_id,
-                        ':pid' => $pid,
-                        ':uid' => $user_id,
+                        ':mid'      => $meeting_id,
+                        ':pid'      => $pid,
+                        ':uid'      => $user_id,
+                        ':is_guest' => 0,
+                    ]);
+                }
+
+                // Guests (avoid duplicates if someone is both selected)
+                $memberIdSet = array_flip($participant_ids);
+                foreach ($extra_participant_ids as $pid) {
+                    if ($pid <= 0) continue;
+                    if (isset($memberIdSet[$pid])) continue; // skip if already added as member
+                    $ins->execute([
+                        ':mid'      => $meeting_id,
+                        ':pid'      => $pid,
+                        ':uid'      => $user_id,
+                        ':is_guest' => 1,
                     ]);
                 }
             }
@@ -317,8 +386,9 @@ include __DIR__ . '/../header.php';
     </select>
   </div>
 
+  <!-- Committee members multi-select (same as before) -->
   <div class="mb-3">
-    <label class="form-label">Participants</label>
+    <label class="form-label">Committee Members (to invite)</label>
     <select id="participant_ids" name="participant_ids[]" class="form-select" multiple size="6">
       <?php foreach ($committee_members as $p): ?>
         <option value="<?= (int)$p['id'] ?>" <?= in_array($p['id'], $participant_ids) ? 'selected' : '' ?>>
@@ -328,6 +398,85 @@ include __DIR__ . '/../header.php';
     </select>
     <div class="form-text">Hold Ctrl (Windows) to select multiple.</div>
   </div>
+
+  <!-- Attendees card (info + guests) -->
+  <?php if ($committee_id > 0 && $committee): ?>
+  <div class="card shadow-sm border-0 mb-3">
+    <div class="card-header bg-white border-0 d-flex justify-content-between align-items-center">
+      <h5 class="mb-0">
+        <i class="bi bi-people-fill text-primary me-1"></i>
+        Attendees
+      </h5>
+      <span class="badge bg-light text-muted">
+        <?= count($committeeMembers) ?> committee member<?= count($committeeMembers) === 1 ? '' : 's' ?>
+      </span>
+    </div>
+    <div class="card-body">
+
+      <div class="mb-3">
+        <label class="form-label small text-muted mb-1">Committee members</label>
+        <div class="border rounded p-2 small bg-light">
+          <p class="mb-1">
+            Members of <strong><?= htmlspecialchars($committee['name']) ?></strong> are listed above in
+            <strong>Committee Members</strong>. Select those you want to invite. You can also add guests below.
+          </p>
+
+          <?php if ($committeeMembers): ?>
+            <div class="d-flex flex-wrap gap-2 mt-1">
+              <?php foreach ($committeeMembers as $m): ?>
+                <span class="badge bg-secondary-subtle text-secondary-emphasis">
+                  <?= htmlspecialchars($m['full_name']) ?>
+                  <?php if (!empty($m['email'])): ?>
+                    <span class="text-muted"> · <?= htmlspecialchars($m['email']) ?></span>
+                  <?php endif; ?>
+                </span>
+              <?php endforeach; ?>
+            </div>
+          <?php else: ?>
+            <p class="text-muted mb-0">
+              This committee does not have members yet. You can still invite participants as guests below.
+            </p>
+          <?php endif; ?>
+        </div>
+      </div>
+
+      <!-- Extra participants (guests) from master participants list -->
+      <div class="mb-0">
+        <label class="form-label small text-muted mb-1">
+          Additional participants (guests, optional)
+        </label>
+        <p class="text-muted small mb-2">
+          Invite guests who are <strong>not</strong> members of this committee, such as observers,
+          external experts, or one-time attendees.
+        </p>
+
+        <input type="text"
+               class="form-control form-control-sm mb-2"
+               id="extraSearch"
+               placeholder="Search by name or email...">
+
+        <select multiple
+                size="6"
+                name="extra_participant_ids[]"
+                id="extraParticipants"
+                class="form-select form-select-sm">
+          <?php foreach ($extraParticipants as $p): ?>
+            <option value="<?= (int)$p['id'] ?>">
+              <?= htmlspecialchars($p['full_name']) ?>
+              <?php if (!empty($p['email'])): ?>
+                (<?= htmlspecialchars($p['email']) ?>)
+              <?php endif; ?>
+            </option>
+          <?php endforeach; ?>
+        </select>
+        <div class="form-text small text-muted">
+          Hold <strong>Ctrl</strong> (Windows) or <strong>Cmd</strong> (Mac) to select multiple guests.
+        </div>
+      </div>
+
+    </div>
+  </div>
+  <?php endif; ?>
 
   <button id="saveBtn" type="submit" class="btn btn-success">
     <i class="bi bi-calendar-plus"></i> Save Meeting
@@ -343,12 +492,11 @@ include __DIR__ . '/../header.php';
         <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
       </div>
       <div class="modal-body">
-      
-          <p>
-      The venue <strong id="selectedVenueName"></strong> already has the following meeting(s) that overlap the chosen time.
-      You can still save — choose <strong>Force Save</strong> to continue.
-    </p>
-<div id="conflictList"></div>
+        <p>
+          The venue <strong id="selectedVenueName"></strong> already has the following meeting(s) that overlap the chosen time.
+          You can still save — choose <strong>Force Save</strong> to continue.
+        </p>
+        <div id="conflictList"></div>
         <hr>
         <div id="participantConflictList" class="mt-2"></div>
       </div>
@@ -364,12 +512,13 @@ include __DIR__ . '/../header.php';
 
 <script>
 (function(){
-  // helper: get selected participants values as array
+  // helper: get selected values as array
   function getSelectedValues(select) {
     var out = [];
+    if (!select) return out;
     for (var i=0;i<select.options.length;i++){
       var opt = select.options[i];
-      if (opt.selected) out.push(opt.value);
+      if (opt.selected && opt.style.display !== 'none') out.push(opt.value);
     }
     return out;
   }
@@ -390,29 +539,32 @@ include __DIR__ . '/../header.php';
   form.addEventListener('submit', function(e){
     // If the form already contains a force_save hidden field and its value is 1, allow submit to proceed.
     if (form.querySelector('input[name="force_save"]')) {
-      // allow submit (this is the confirmed save)
       return true;
     }
 
-    // Otherwise intercept and do AJAX check
     e.preventDefault();
 
     var fd = new FormData();
     fd.append('ajax_check', '1');
-    // append required fields for checking
     fd.append('committee_id', form.querySelector('[name="committee_id"]').value || '');
     fd.append('start_datetime', document.getElementById('start_datetime').value || '');
     fd.append('end_datetime', document.getElementById('end_datetime').value || '');
     fd.append('venue_id', document.getElementById('venue_id').value || '');
 
-    // participant ids
+    // committee member participant ids
     var sel = document.getElementById('participant_ids');
     var parts = getSelectedValues(sel);
     for (var i=0;i<parts.length;i++){
       fd.append('participant_ids[]', parts[i]);
     }
 
-    // send fetch
+    // extra guest participant ids
+    var extraSel = document.getElementById('extraParticipants');
+    var extraParts = getSelectedValues(extraSel);
+    for (var j=0;j<extraParts.length;j++){
+      fd.append('extra_participant_ids[]', extraParts[j]);
+    }
+
     fetch('', {
       method: 'POST',
       credentials: 'same-origin',
@@ -422,16 +574,13 @@ include __DIR__ . '/../header.php';
       }
     }).then(function(resp){ return resp.json(); })
       .then(function(json){
-        // If there are any venue conflicts, show modal with list.
         var vcon = json.venue_conflicts || [];
         var pcon = json.participant_conflicts || [];
         if (vcon.length === 0 && pcon.length === 0) {
-          // no conflicts - submit form normally
           form.submit();
           return;
         }
 
-        // build conflict lists
         conflictList.innerHTML = '';
         participantConflictList.innerHTML = '';
 
@@ -464,28 +613,23 @@ include __DIR__ . '/../header.php';
           participantConflictList.appendChild(ul2);
         }
 
-        // show modal
         if (bsModal) {
           bsModal.show();
         } else {
-          // fallback to confirm if bootstrap not available
-          var msg = 'Venue conflicts found:\\n';
+          var msg = 'Venue conflicts found:\n';
           for (var k=0;k<vcon.length;k++){
-            msg += '- ' + vcon[k].title + ' (' + vcon[k].start_datetime + ' to ' + vcon[k].end_datetime + ')\\n';
+            msg += '- ' + vcon[k].title + ' (' + vcon[k].start_datetime + ' to ' + vcon[k].end_datetime + ')\n';
           }
-          if (!confirm(msg + '\\nForce save?')) {
+          if (!confirm(msg + '\nForce save?')) {
             return;
           }
-          // user confirmed, perform force save by adding hidden input and submitting
           var hidden = document.createElement('input'); hidden.type='hidden'; hidden.name='force_save'; hidden.value='1';
           form.appendChild(hidden);
           form.submit();
           return;
         }
 
-        // when user clicks Force Save - add hidden input and submit
         modalForceSave.onclick = function(){
-          // add hidden input force_save=1
           var h = form.querySelector('input[name="force_save"]');
           if (!h) {
             h = document.createElement('input');
@@ -496,14 +640,12 @@ include __DIR__ . '/../header.php';
           } else {
             h.value = '1';
           }
-          // hide modal then submit
           if (bsModal) bsModal.hide();
           form.submit();
         };
 
       }).catch(function(err){
         console.error('Check failed', err);
-        // on error, fallback to normal submit to avoid blocking
         form.submit();
       });
 
@@ -511,22 +653,41 @@ include __DIR__ . '/../header.php';
   });
 
 })();
+
 document.addEventListener("DOMContentLoaded", function () {
-
   // Update venue name on selection change
-  document.getElementById("venue_id").addEventListener("change", function () {
+  var venueSelect = document.getElementById("venue_id");
+  if (venueSelect) {
+    venueSelect.addEventListener("change", function () {
       var selectedText = this.options[this.selectedIndex].text;
-      document.getElementById("selectedVenueName").textContent = selectedText;
-  });
+      var nameSpan = document.getElementById("selectedVenueName");
+      if (nameSpan) nameSpan.textContent = selectedText;
+    });
+  }
 
-  // When checking conflicts, update the modal name right before modal opens
   var saveBtn = document.getElementById("saveBtn");
-  saveBtn.addEventListener("click", function () {
+  if (saveBtn) {
+    saveBtn.addEventListener("click", function () {
       var venueDropdown = document.getElementById("venue_id");
+      if (!venueDropdown) return;
       var selectedVenueText = venueDropdown.options[venueDropdown.selectedIndex].text;
-      document.getElementById("selectedVenueName").textContent = selectedVenueText;
-  });
+      var nameSpan = document.getElementById("selectedVenueName");
+      if (nameSpan) nameSpan.textContent = selectedVenueText;
+    });
+  }
 
+  // Guest search filter
+  var extraSearch = document.getElementById('extraSearch');
+  var extraSelect = document.getElementById('extraParticipants');
+  if (extraSearch && extraSelect) {
+    extraSearch.addEventListener('input', function () {
+      var term = this.value.toLowerCase();
+      var options = extraSelect.options;
+      for (var i = 0; i < options.length; i++) {
+        var text = options[i].text.toLowerCase();
+        options[i].style.display = text.indexOf(term) !== -1 ? '' : 'none';
+      }
+    });
+  }
 });
 </script>
-

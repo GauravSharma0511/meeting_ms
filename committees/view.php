@@ -63,9 +63,9 @@ include __DIR__ . '/../header.php';
   </div>
 
   <div class="text-end">
-    <a class="btn btn-outline-secondary btn-sm mb-2" href="/mms/committees/list.php">
+    <!-- <a class="btn btn-outline-secondary btn-sm mb-2" href="/mms/committees/list.php">
       <i class="bi bi-arrow-left-short me-1"></i> Back to Committees
-    </a>
+    </a> -->
     <div>
       <a class="btn btn-primary btn-sm" href="/mms/meetings/add.php?committee_id=<?= (int)$committee['id'] ?>">
         <i class="bi bi-calendar-plus me-1"></i> Schedule Meeting
