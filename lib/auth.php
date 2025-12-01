@@ -39,30 +39,48 @@ function isSuperAdmin(array $user = null): bool {
 
 /**
  * Returns array of committee IDs where this user is admin (head).
- * Uses users.participant_id -> committee_users.participant_id.
+ * Uses committee_admins.user_id -> users.id.
  */
 function getUserAdminCommitteeIds(PDO $pdo, array $user = null): array {
     if ($user === null) {
         $user = currentUser();
     }
-    if (empty($user['participant_id'])) {
+
+    if (!$user || empty($user['id'])) {
         return [];
     }
-    $pid = (int)$user['participant_id'];
+
+    // Superadmin: optionally, treat as admin of all committees
+    if (isSuperAdmin($user)) {
+        $stmt = $pdo->query("SELECT id FROM committees");
+        $rows = $stmt->fetchAll(PDO::FETCH_COLUMN);
+        return array_map('intval', $rows ?: []);
+    }
+
+    $uid = (int)$user['id'];
 
     $stmt = $pdo->prepare("
         SELECT committee_id
-        FROM committee_users
-        WHERE participant_id = :pid
-          AND role_in_committee = 'admin'
+        FROM committee_admins
+        WHERE user_id = :uid
     ");
-    $stmt->execute([':pid' => $pid]);
+    $stmt->execute([':uid' => $uid]);
     $rows = $stmt->fetchAll(PDO::FETCH_COLUMN);
 
     return array_map('intval', $rows ?: []);
 }
 
 function isCommitteeAdmin(PDO $pdo, array $user = null): bool {
+    if ($user === null) {
+        $user = currentUser();
+    }
+    if (!$user) return false;
+
+    // Superadmin is always considered admin
+    if (isSuperAdmin($user)) {
+        return true;
+    }
+
     return count(getUserAdminCommitteeIds($pdo, $user)) > 0;
 }
 

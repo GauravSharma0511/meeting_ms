@@ -45,6 +45,8 @@ $participants = $pdo->query("
     FROM participants
     ORDER BY full_name
 ")->fetchAll();
+$adminCommittees  = getUserAdminCommitteeIds($pdo, $user);
+$canManageMembers = $isSuper || in_array($id, $adminCommittees, true);
 
 include __DIR__ . '/../header.php';
 ?>
@@ -132,7 +134,7 @@ include __DIR__ . '/../header.php';
     </div>
   </div>
 
-  <!-- Add member form -->
+    <!-- Add member form -->
   <div class="col-lg-5">
     <div class="card shadow-sm border-0 h-100">
       <div class="card-header bg-white border-0">
@@ -142,54 +144,49 @@ include __DIR__ . '/../header.php';
         </h5>
       </div>
       <div class="card-body">
-        <form method="post" action="/mms/committees/add_admin.php" class="row g-2">
-          <input type="hidden" name="csrf" value="<?= csrf_token() ?>">
-          <input type="hidden" name="committee_id" value="<?= (int)$committee['id'] ?>">
-
-          <div class="col-12">
-            <label class="form-label small text-muted mb-1">Select Participant</label>
-            <select name="participant_id" class="form-select form-select-sm" required>
-              <option value="">-- Select --</option>
-              <?php foreach ($participants as $p): ?>
-                <option value="<?= (int)$p['id'] ?>">
-                  <?= htmlspecialchars($p['full_name']) ?>
-                </option>
-              <?php endforeach; ?>
-            </select>
+        <?php if (!$canManageMembers): ?>
+          <div class="alert alert-warning small mb-0">
+            You don't have permission to add members for this committee.
+            Please contact a committee head or the system administrator.
           </div>
-
-          <?php if ($isSuper): ?>
-            <!-- Only superadmin can assign admin role -->
-            <div class="col-12">
-              <label class="form-label small text-muted mb-1">Role in Committee</label>
-              <select name="role_in_committee" class="form-select form-select-sm">
-                <option value="member">Member</option>
-                <option value="admin">Admin</option>
-              </select>
-              <div class="form-text small">
-                Only superadmin can assign the <strong>Admin</strong> role.
-              </div>
-            </div>
-          <?php else: ?>
-            <!-- Committee admins: force role to member, no dropdown -->
+        <?php else: ?>
+          <form method="post" action="/mms/committees/add_member.php" class="row g-2">
+            <input type="hidden" name="csrf" value="<?= csrf_token() ?>">
+            <input type="hidden" name="committee_id" value="<?= (int)$committee['id'] ?>">
+            <!-- Always add as member from here -->
             <input type="hidden" name="role_in_committee" value="member">
+
+            <div class="col-12">
+              <label class="form-label small text-muted mb-1">Select Participant</label>
+              <select name="participant_id" class="form-select form-select-sm" required>
+                <option value="">-- Select --</option>
+                <?php foreach ($participants as $p): ?>
+                  <option value="<?= (int)$p['id'] ?>">
+                    <?= htmlspecialchars($p['full_name']) ?>
+                  </option>
+                <?php endforeach; ?>
+              </select>
+            </div>
+
             <div class="col-12">
               <div class="alert alert-info py-2 small mb-2">
-                As a committee admin, you can add <strong>members</strong> only.
-                Admin privileges are managed by the system superadmin.
+                This form adds <strong>members</strong> only.<br>
+                Committee heads (admins) are assigned by the superadmin from
+                the <em>Manage Committee Heads</em> section.
               </div>
             </div>
-          <?php endif; ?>
 
-          <div class="col-12 mt-1">
-            <button class="btn btn-success btn-sm">
-              <i class="bi bi-plus-lg me-1"></i> Add Member
-            </button>
-          </div>
-        </form>
+            <div class="col-12 mt-1">
+              <button class="btn btn-success btn-sm">
+                <i class="bi bi-plus-lg me-1"></i> Add Member
+              </button>
+            </div>
+          </form>
+        <?php endif; ?>
       </div>
     </div>
   </div>
 </div>
+          
 
 <?php include __DIR__ . '/../footer.php'; ?>
