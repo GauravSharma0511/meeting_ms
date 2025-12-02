@@ -351,10 +351,10 @@ include __DIR__ . '/../header.php';
                 </button>
               </div>
             </form>
-            <p class="small text-muted mt-2 mb-0">
+            <!-- <p class="small text-muted mt-2 mb-0">
               These admins will be able to manage meetings and members for this committee
               (as per your permission checks using <code>getUserAdminCommitteeIds()</code>).
-            </p>
+            </p> -->
           <?php endif; ?>
         </div>
       </div>
