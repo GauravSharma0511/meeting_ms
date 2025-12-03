@@ -62,61 +62,91 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if ($action === 'add_admin') {
         // Assign a new admin (head) to this committee
 
-        $userId = (int)($_POST['user_id'] ?? 0);
-        if ($userId <= 0) {
-            flash_set('error', 'Please select a user to assign as admin.');
+        // From the search-based select: user_id actually contains RJ code / username
+        $rjcode = trim($_POST['user_id'] ?? '');
+        if ($rjcode === '') {
+            flash_set('error', 'Please search and select a user to assign as admin.');
             header('Location: /mms/committees/add_admin.php?committee_id=' . $committeeId);
             exit;
         }
 
-        // Check that user exists and is not superadmin (you can relax this if you want)
-        $uStmt = $pdo->prepare("
-            SELECT id, username AS name, email, role
-            FROM users 
-            WHERE id = :id AND role <> 'superuser'
-            LIMIT 1
-        ");
-        $uStmt->execute([':id' => $userId]);
-        $targetUser = $uStmt->fetch();
+        try {
+            // First try to find existing MMS user with this username (RJ code)
+            $uStmt = $pdo->prepare("
+                SELECT id, username AS name, email, role
+                FROM users 
+                WHERE username = :uname
+                  AND role <> 'superuser'
+                LIMIT 1
+            ");
+            $uStmt->execute([':uname' => $rjcode]);
+            $targetUser = $uStmt->fetch();
 
-        if (!$targetUser) {
-            flash_set('error', 'Selected user not found or cannot be assigned.');
-            header('Location: /mms/committees/add_admin.php?committee_id=' . $committeeId);
-            exit;
-        }
+            if (!$targetUser) {
+                // Auto-create MMS user for this RJ code
+                $pdo->beginTransaction();
 
-        // Check if already admin of this committee
-        $checkStmt = $pdo->prepare("
-            SELECT id 
-            FROM committee_admins
-            WHERE committee_id = :cid AND user_id = :uid
-            LIMIT 1
-        ");
-        $checkStmt->execute([
-            ':cid' => $committeeId,
-            ':uid' => $userId,
-        ]);
+                // Minimal user record; role 'admin' (or rely on default if you prefer)
+                $insertUser = $pdo->prepare("
+                    INSERT INTO users (username, email, password_hash, role, participant_id)
+                    VALUES (:uname, NULL, NULL, 'admin', NULL)
+                ");
+                $insertUser->execute([':uname' => $rjcode]);
 
-        if ($checkStmt->fetch()) {
-            flash_set('error', 'This user is already an admin for this committee.');
-            header('Location: /mms/committees/add_admin.php?committee_id=' . $committeeId);
-            exit;
-        }
+                // Postgres style: specify users_id_seq (created by SERIAL)
+                $newUserId = (int)$pdo->lastInsertId('users_id_seq');
 
-        // Insert into committee_admins
-        $insertStmt = $pdo->prepare("
-            INSERT INTO committee_admins (committee_id, user_id, assigned_at)
-            VALUES (:cid, :uid, NOW())
-        ");
-        $ok = $insertStmt->execute([
-            ':cid' => $committeeId,
-            ':uid' => $userId,
-        ]);
+                $targetUser = [
+                    'id'    => $newUserId,
+                    'name'  => $rjcode,
+                    'email' => null,
+                    'role'  => 'admin',
+                ];
 
-        if ($ok) {
-            flash_set('success', 'Admin assigned successfully: ' . ($targetUser['name'] ?? ''));
-        } else {
-            flash_set('error', 'Failed to assign admin. Please try again.');
+                $pdo->commit();
+            }
+
+            $userId = (int)$targetUser['id'];
+
+            // Check if already admin of this committee
+            $checkStmt = $pdo->prepare("
+                SELECT id 
+                FROM committee_admins
+                WHERE committee_id = :cid AND user_id = :uid
+                LIMIT 1
+            ");
+            $checkStmt->execute([
+                ':cid' => $committeeId,
+                ':uid' => $userId,
+            ]);
+
+            if ($checkStmt->fetch()) {
+                flash_set('error', 'This user is already an admin for this committee.');
+                header('Location: /mms/committees/add_admin.php?committee_id=' . $committeeId);
+                exit;
+            }
+
+            // Insert into committee_admins with REAL users.id
+            $insertStmt = $pdo->prepare("
+                INSERT INTO committee_admins (committee_id, user_id, assigned_at)
+                VALUES (:cid, :uid, NOW())
+            ");
+            $ok = $insertStmt->execute([
+                ':cid' => $committeeId,
+                ':uid' => $userId,
+            ]);
+
+            if ($ok) {
+                flash_set('success', 'Admin assigned successfully: ' . ($targetUser['name'] ?? ''));
+            } else {
+                flash_set('error', 'Failed to assign admin. Please try again.');
+            }
+
+        } catch (Exception $e) {
+            if ($pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
+            flash_set('error', 'Error while assigning admin: ' . $e->getMessage());
         }
 
         header('Location: /mms/committees/add_admin.php?committee_id=' . $committeeId);
@@ -200,14 +230,6 @@ if ($committeeId > 0) {
     $adminsStmt->execute([':cid' => $committeeId]);
     $currentAdmins = $adminsStmt->fetchAll(PDO::FETCH_ASSOC);
 }
-
-// Load candidate users who can be assigned as admins (exclude superuser)
-$availableUsers = $pdo->query("
-    SELECT id, username AS name, email, role
-    FROM users
-    WHERE role <> 'superuser'
-    ORDER BY username ASC
-")->fetchAll(PDO::FETCH_ASSOC);
 
 include __DIR__ . '/../header.php';
 ?>
@@ -320,46 +342,123 @@ include __DIR__ . '/../header.php';
           </h5>
         </div>
         <div class="card-body">
-          <?php if (!$availableUsers): ?>
-            <p class="text-muted small mb-0">
-              No eligible users found to assign as admins.
-            </p>
-          <?php else: ?>
-            <form method="post" class="row g-2">
-              <input type="hidden" name="csrf" value="<?= csrf_token() ?>">
-              <input type="hidden" name="committee_id" value="<?= (int)$committeeId ?>">
-              <input type="hidden" name="action" value="add_admin">
+          <form method="post" class="row g-2">
+            <input type="hidden" name="csrf" value="<?= csrf_token() ?>">
+            <input type="hidden" name="committee_id" value="<?= (int)$committeeId ?>">
+            <input type="hidden" name="action" value="add_admin">
 
-              <div class="col-12">
-                <label class="form-label small text-muted mb-1">Select User</label>
-                <select name="user_id" class="form-select form-select-sm" required>
-                  <option value="">-- Choose user --</option>
-                  <?php foreach ($availableUsers as $u): ?>
-                    <option value="<?= (int)$u['id'] ?>">
-                      <?= htmlspecialchars($u['name']) ?>
-                      <?php if (!empty($u['email'])): ?>
-                        (<?= htmlspecialchars($u['email']) ?>)
-                      <?php endif; ?>
-                    </option>
-                  <?php endforeach; ?>
-                </select>
+            <div class="col-12">
+              <label class="form-label small text-muted mb-1">Search User (RJ code / Name)</label>
+              <div class="input-group input-group-sm mb-2">
+                <span class="input-group-text">Search</span>
+                <input type="text"
+                       id="adminSearchInput"
+                       class="form-control"
+                       placeholder="Type to search users">
               </div>
+            </div>
 
-              <div class="col-12 mt-1">
-                <button class="btn btn-success btn-sm">
-                  <i class="bi bi-plus-lg me-1"></i> Assign as Head
-                </button>
-              </div>
-            </form>
-            <!-- <p class="small text-muted mt-2 mb-0">
-              These admins will be able to manage meetings and members for this committee
-              (as per your permission checks using <code>getUserAdminCommitteeIds()</code>).
-            </p> -->
-          <?php endif; ?>
+            <div class="col-12">
+              <label class="form-label small text-muted mb-1">Select User</label>
+              <select name="user_id" id="adminSelect" class="form-select form-select-sm" required>
+                <option value="">-- Select user (search above) --</option>
+              </select>
+            </div>
+
+            <div class="col-12 mt-1">
+              <button class="btn btn-success btn-sm">
+                <i class="bi bi-plus-lg me-1"></i> Assign as Head
+              </button>
+            </div>
+          </form>
+          <p class="small text-muted mt-2 mb-0">
+            Users are searched from SSO (rjcode / name) and auto-registered in MMS if not present.
+          </p>
         </div>
       </div>
     </div>
   </div>
 <?php endif; ?>
+
+<script>
+// Search users via API and populate adminSelect
+document.addEventListener('DOMContentLoaded', function () {
+  const adminSearchInput = document.getElementById('adminSearchInput');
+  const adminSelect      = document.getElementById('adminSelect');
+
+  if (adminSearchInput && adminSelect) {
+    adminSearchInput.addEventListener('input', function () {
+      const query = adminSearchInput.value.trim();
+
+      // Do nothing for very short queries
+      if (query.length < 2) {
+        return;
+      }
+
+      // searchUsers.php is in /mms/admin/, this file is in /mms/committees/
+      const url = '../admin/searchUsers.php?q=' + encodeURIComponent(query);
+
+      fetch(url, {
+        method: 'GET',
+        headers: {
+          'Accept': 'application/json'
+        }
+      })
+      .then(function (response) {
+        if (!response.ok) {
+          throw new Error('Network response was not ok: ' + response.status);
+        }
+        return response.json();
+      })
+      .then(function (data) {
+        if (!Array.isArray(data)) {
+          console.error('Response is not an array:', data);
+          return;
+        }
+
+        // Clear existing options and add default one
+        adminSelect.innerHTML = '';
+        const defaultOpt = document.createElement('option');
+        defaultOpt.value = '';
+        defaultOpt.textContent = '-- Select user (search above) --';
+        adminSelect.appendChild(defaultOpt);
+
+        if (data.length === 0) {
+          const noOpt = document.createElement('option');
+          noOpt.disabled = true;
+          noOpt.textContent = 'No users found';
+          adminSelect.appendChild(noOpt);
+          return;
+        }
+
+        data.forEach(function (user) {
+          // Here API returns rjcode + display_name (+ maybe email)
+          const opt = document.createElement('option');
+          // Value is RJ code (username in MMS)
+          opt.value = user.rjcode;
+
+          const labelParts = [];
+          if (user.rjcode) {
+            labelParts.push(user.rjcode);
+          }
+          if (user.display_name) {
+            labelParts.push(user.display_name);
+          }
+          let label = labelParts.join(' - ');
+          if (user.email) {
+            label += ' (' + user.email + ')';
+          }
+
+          opt.textContent = label || (user.rjcode || 'Unknown user');
+          adminSelect.appendChild(opt);
+        });
+      })
+      .catch(function (error) {
+        console.error('Admin search fetch error:', error);
+      });
+    });
+  }
+});
+</script>
 
 <?php include __DIR__ . '/../footer.php'; ?>

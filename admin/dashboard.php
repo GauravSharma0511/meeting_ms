@@ -7,8 +7,8 @@ require_once __DIR__ . '/../lib/helpers.php';
 
 requireLogin();
 
-$user = currentUser();
-$pdo  = getPDO();
+$user   = currentUser();
+$pdo    = getPDO();
 $userId = (int)($user['id'] ?? 0);
 
 // Superadmin only
@@ -387,7 +387,6 @@ include __DIR__ . '/../header.php';
 
   </div>
 </div>
-
 
 <?php if ($msg = flash_get('success')): ?>
   <div class="alert alert-success"><?= htmlspecialchars($msg) ?></div>
@@ -918,17 +917,81 @@ document.addEventListener('DOMContentLoaded', function () {
     });
   }
 
-  // ---- Admin search (filter dropdown) ----
+  // ---- Admin search using API (no jQuery) ----
   const adminSearchInput = document.getElementById('adminSearchInput');
   const adminSelect      = document.getElementById('adminSelect');
 
   if (adminSearchInput && adminSelect) {
     adminSearchInput.addEventListener('input', function () {
-      const query = this.value.toLowerCase();
-      Array.from(adminSelect.options).forEach(function (opt, idx) {
-        if (idx === 0) return; // skip placeholder
-        const text = opt.textContent.toLowerCase();
-        opt.hidden = query && !text.includes(query);
+      const query = adminSearchInput.value.trim();
+
+      // Do nothing for very short queries
+      if (query.length < 2) {
+        return;
+      }
+
+      // Adjust the URL if your searchUsers.php is in a different folder
+      const url = 'searchUsers.php?q=' + encodeURIComponent(query);
+
+      fetch(url, {
+        method: 'GET',
+        headers: {
+          'Accept': 'application/json'
+        }
+      })
+      .then(function (response) {
+        if (!response.ok) {
+          throw new Error('Network response was not ok: ' + response.status);
+        }
+        console.log(response)
+        return response.json();
+      })
+      .then(function (data) {
+        if (!Array.isArray(data)) {
+          console.error('Response is not an array:', data);
+          return;
+        }
+
+        // Clear existing options and add default one
+        adminSelect.innerHTML = '';
+        const defaultOpt = document.createElement('option');
+        defaultOpt.value = '';
+        defaultOpt.textContent = '-- Select user (optional) --';
+        adminSelect.appendChild(defaultOpt);
+
+        if (data.length === 0) {
+          const noOpt = document.createElement('option');
+          noOpt.disabled = true;
+          noOpt.textContent = 'No users found';
+          adminSelect.appendChild(noOpt);
+          return;
+        }
+
+        data.forEach(function (user) {
+          // Make sure your API returns: id, rjcode (optional), display_name, email
+          const opt = document.createElement('option');
+          // opt.value = user.id;
+          opt.value = user.rjcode;
+
+
+          const labelParts = [];
+          if (user.rjcode) {
+            labelParts.push(user.rjcode);
+          }
+          if (user.display_name) {
+            labelParts.push(user.display_name);
+          }
+          let label = labelParts.join(' - ');
+          if (user.email) {
+            label += ' (' + user.email + ')';
+          }
+
+          opt.textContent = label || ('ID ' + user.id);
+          adminSelect.appendChild(opt);
+        });
+      })
+      .catch(function (error) {
+        console.error('Admin search fetch error:', error);
       });
     });
   }
