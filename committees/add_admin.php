@@ -83,25 +83,30 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $targetUser = $uStmt->fetch();
 
             if (!$targetUser) {
+               $displayName = trim($_POST['display_name'] ?? '');
                 // Auto-create MMS user for this RJ code
                 $pdo->beginTransaction();
 
                 // Minimal user record; role 'admin' (or rely on default if you prefer)
-                $insertUser = $pdo->prepare("
-                    INSERT INTO users (username, email, password_hash, role, participant_id)
-                    VALUES (:uname, NULL, NULL, 'admin', NULL)
-                ");
-                $insertUser->execute([':uname' => $rjcode]);
+                 $insertUser = $pdo->prepare("
+        INSERT INTO users (username, full_name, email, password_hash, role, participant_id)
+        VALUES (:uname, :full_name, NULL, NULL, 'admin', NULL)
+    ");
+               $insertUser->execute([
+        ':uname'      => $rjcode,
+        ':full_name'  => $displayName !== '' ? $displayName : $rjcode
+    ]);
 
                 // Postgres style: specify users_id_seq (created by SERIAL)
                 $newUserId = (int)$pdo->lastInsertId('users_id_seq');
 
-                $targetUser = [
-                    'id'    => $newUserId,
-                    'name'  => $rjcode,
-                    'email' => null,
-                    'role'  => 'admin',
-                ];
+               $targetUser = [
+        'id'        => $newUserId,
+        'name'      => $displayName ?: $rjcode,
+        'full_name' => $displayName,
+        'email'     => null,
+        'role'      => 'admin',
+    ];
 
                 $pdo->commit();
             }
@@ -346,6 +351,8 @@ include __DIR__ . '/../header.php';
             <input type="hidden" name="csrf" value="<?= csrf_token() ?>">
             <input type="hidden" name="committee_id" value="<?= (int)$committeeId ?>">
             <input type="hidden" name="action" value="add_admin">
+            <input type="hidden" name="display_name" id="selectedName">
+
 
             <div class="col-12">
               <label class="form-label small text-muted mb-1">Search User (RJ code / Name)</label>
@@ -387,6 +394,7 @@ document.addEventListener('DOMContentLoaded', function () {
   const adminSelect      = document.getElementById('adminSelect');
 
   if (adminSearchInput && adminSelect) {
+    // Live search on input
     adminSearchInput.addEventListener('input', function () {
       const query = adminSearchInput.value.trim();
 
@@ -437,6 +445,9 @@ document.addEventListener('DOMContentLoaded', function () {
           // Value is RJ code (username in MMS)
           opt.value = user.rjcode;
 
+          // ⭐ store name in data attribute so we can submit it
+          opt.setAttribute('data-name', user.display_name || '');
+
           const labelParts = [];
           if (user.rjcode) {
             labelParts.push(user.rjcode);
@@ -457,8 +468,21 @@ document.addEventListener('DOMContentLoaded', function () {
         console.error('Admin search fetch error:', error);
       });
     });
+
+    // When user is selected, copy their name into hidden input
+    adminSelect.addEventListener('change', function () {
+      const option = adminSelect.selectedOptions[0];
+      if (!option) return;
+
+      const name = option.dataset.name || '';
+      const hiddenInput = document.getElementById('selectedName');
+      if (hiddenInput) {
+        hiddenInput.value = name;
+      }
+    });
   }
 });
 </script>
+
 
 <?php include __DIR__ . '/../footer.php'; ?>

@@ -213,32 +213,47 @@ include __DIR__ . '/../header.php';
 
 <div class="mb-4">
   <div class="d-flex flex-wrap justify-content-between align-items-center">
+
+    <!-- LEFT SIDE -->
     <div>
       <h2 class="mb-1">Committee Admin Dashboard</h2>
+
+      <?php
+        $displayName = $user['full_name'] ?? $user['username'] ?? 'User';
+      ?>
+
       <p class="text-muted mb-0">
         Welcome,
-        <strong><?= htmlspecialchars($user['username'] ?? 'User') ?></strong>
+        <strong>
+          <?= htmlspecialchars($displayName) ?>
+          <?php if (!empty($user['username'])): ?>
+            (<?= htmlspecialchars($user['username']) ?>)
+          <?php endif; ?>
+        </strong>
         – you are admin for
         <strong><?= count($myCommitteeIds) ?></strong>
         committee<?= count($myCommitteeIds) === 1 ? '' : 's' ?>.
       </p>
     </div>
 
-    <!-- Toggle: My Committees / All Committees -->
-    <div class="mt-2 mt-md-0">
-      <div class="btn-group btn-group-sm" role="group" aria-label="Committee scope toggle">
+    <!-- RIGHT SIDE (Toggle Buttons) -->
+    <div class="mt-2 mt-md-0 ms-auto">
+      <div class="btn-group btn-group-sm" role="group">
         <a href="/mms/committee_admin/dashboard.php?view=mine"
            class="btn <?= $view === 'mine' ? 'btn-primary' : 'btn-outline-primary' ?>">
           <i class="bi bi-person-badge me-1"></i> My Committees
         </a>
+
         <a href="/mms/committee_admin/dashboard.php?view=all"
            class="btn <?= $view === 'all' ? 'btn-primary' : 'btn-outline-primary' ?>">
           <i class="bi bi-globe2 me-1"></i> All Committees
         </a>
       </div>
     </div>
+
   </div>
 </div>
+
 
 <?php if ($msg = flash_get('success')): ?>
   <div class="alert alert-success"><?= htmlspecialchars($msg) ?></div>
