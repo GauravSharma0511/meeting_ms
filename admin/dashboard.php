@@ -7,39 +7,139 @@ require_once __DIR__ . '/../lib/helpers.php';
 
 requireLogin();
 
-$user = currentUser();
-$pdo  = getPDO();
+$user   = currentUser();
+$pdo    = getPDO();
 $userId = (int)($user['id'] ?? 0);
 
-// -------- QUICK CREATE HANDLERS (modals POST back here) --------
+// Superadmin only
+if (!isSuperAdmin($user)) {
+    http_response_code(403);
+    echo "Forbidden – only superadmin can access the admin dashboard.";
+    exit;
+}
+
+// =========================================================
+//  QUICK CREATE HANDLERS (modals POST back here)
+// =========================================================
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
-    // Quick add committee
+    // -------------- QUICK ADD COMMITTEE (WITH MEMBERS + ADMIN) --------------
     if (isset($_POST['quick_add_committee'])) {
-        $name = trim($_POST['committee_name'] ?? '');
-        $desc = trim($_POST['committee_description'] ?? '');
 
-        if ($name !== '') {
+        // Optional CSRF check if you have helpers
+        if (function_exists('csrf_token_is_valid')) {
+            if (!csrf_token_is_valid($_POST['csrf'] ?? '')) {
+                flash_set('error', 'Security token expired. Please try again.');
+                header('Location: /mms/admin/dashboard.php');
+                exit;
+            }
+        }
+
+        $name        = trim($_POST['committee_name'] ?? '');
+        $desc        = trim($_POST['committee_description'] ?? '');
+        $memberIds   = array_map('intval', $_POST['member_ids'] ?? []); // participants
+        $adminUserId = (int)($_POST['admin_user_id'] ?? 0);             // users.id (nodal officer)
+
+        if ($name === '') {
+            flash_set('error', 'Committee name is required.');
+            header('Location: /mms/admin/dashboard.php');
+            exit;
+        }
+
+        try {
+            $pdo->beginTransaction();
+
+            // Create committee
             $stmt = $pdo->prepare("
                 INSERT INTO committees (name, description, created_by_user_id)
                 VALUES (:name, :description, :created_by)
             ");
             $stmt->execute([
-                ':name'       => $name,
-                ':description'=> $desc,
-                ':created_by' => $userId ?: null,
+                ':name'        => $name,
+                ':description' => $desc !== '' ? $desc : null,
+                ':created_by'  => $userId ?: null,
             ]);
-            flash_set('success', 'Committee created successfully.');
-        } else {
-            flash_set('error', 'Committee name is required.');
+
+            // Get new committee ID (Postgres style; MySQL ignores the argument)
+            $committeeId = (int)$pdo->lastInsertId('committees_id_seq');
+
+            // Insert initial members (participants) as 'member'
+            if (!empty($memberIds)) {
+                $memStmt = $pdo->prepare("
+                    INSERT INTO committee_users (committee_id, participant_id, role_in_committee)
+                    VALUES (:cid, :pid, 'member')
+                ");
+                foreach ($memberIds as $pid) {
+                    if ($pid <= 0) continue;
+                    $memStmt->execute([
+                        ':cid' => $committeeId,
+                        ':pid' => $pid,
+                    ]);
+                }
+            }
+
+            // Assign initial committee admin / nodal officer
+            if ($adminUserId > 0) {
+
+                // Avoid duplicate admin entries (safe even if fresh committee)
+                $chk = $pdo->prepare("
+                    SELECT id FROM committee_admins
+                    WHERE committee_id = :cid AND user_id = :uid
+                    LIMIT 1
+                ");
+                $chk->execute([
+                    ':cid' => $committeeId,
+                    ':uid' => $adminUserId,
+                ]);
+
+                if (!$chk->fetch()) {
+                    $admStmt = $pdo->prepare("
+                        INSERT INTO committee_admins (committee_id, user_id, assigned_at)
+                        VALUES (:cid, :uid, NOW())
+                    ");
+                    $admStmt->execute([
+                        ':cid' => $committeeId,
+                        ':uid' => $adminUserId,
+                    ]);
+                }
+
+                // OPTIONAL: auto-add admin as member if linked via participant_id
+                /*
+                $uStmt = $pdo->prepare("SELECT participant_id FROM users WHERE id = :id");
+                $uStmt->execute([':id' => $adminUserId]);
+                $uRow = $uStmt->fetch();
+                if (!empty($uRow['participant_id'])) {
+                    $pid = (int)$uRow['participant_id'];
+                    if ($pid > 0) {
+                        $memStmt->execute([':cid' => $committeeId, ':pid' => $pid]);
+                    }
+                }
+                */
+            }
+
+            $pdo->commit();
+            flash_set('success', 'Committee created successfully with initial members and nodal officer.');
+
+        } catch (Exception $e) {
+            $pdo->rollBack();
+            flash_set('error', 'Error creating committee: ' . $e->getMessage());
         }
 
         header('Location: /mms/admin/dashboard.php');
         exit;
     }
 
-    // Quick add participant
+    // -------------- QUICK ADD PARTICIPANT --------------
     if (isset($_POST['quick_add_participant'])) {
+
+        if (function_exists('csrf_token_is_valid')) {
+            if (!csrf_token_is_valid($_POST['csrf'] ?? '')) {
+                flash_set('error', 'Security token expired. Please try again.');
+                header('Location: /mms/admin/dashboard.php');
+                exit;
+            }
+        }
+
         $fullName      = trim($_POST['participant_name'] ?? '');
         $email         = trim($_POST['participant_email'] ?? '');
         $phone         = trim($_POST['participant_phone'] ?? '');
@@ -65,8 +165,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         exit;
     }
 
-    // Quick add venue
+    // -------------- QUICK ADD VENUE --------------
     if (isset($_POST['quick_add_venue'])) {
+
+        if (function_exists('csrf_token_is_valid')) {
+            if (!csrf_token_is_valid($_POST['csrf'] ?? '')) {
+                flash_set('error', 'Security token expired. Please try again.');
+                header('Location: /mms/admin/dashboard.php');
+                exit;
+            }
+        }
+
         $name    = trim($_POST['venue_name'] ?? '');
         $address = trim($_POST['venue_address'] ?? '');
         $cap     = trim($_POST['venue_capacity'] ?? '');
@@ -93,8 +202,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         exit;
     }
 
-    // Quick schedule meeting (no participants yet; they can be added later)
+    // -------------- QUICK SCHEDULE MEETING --------------
     if (isset($_POST['quick_add_meeting'])) {
+
+        if (function_exists('csrf_token_is_valid')) {
+            if (!csrf_token_is_valid($_POST['csrf'] ?? '')) {
+                flash_set('error', 'Security token expired. Please try again.');
+                header('Location: /mms/admin/dashboard.php');
+                exit;
+            }
+        }
+
         $title   = trim($_POST['meeting_title'] ?? '');
         $desc    = trim($_POST['meeting_description'] ?? '');
         $cid     = !empty($_POST['committee_id']) ? (int)$_POST['committee_id'] : null;
@@ -116,13 +234,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 )
             ");
             $stmt->execute([
-                ':committee_id'      => $cid,
-                ':title'             => $title,
-                ':description'       => $desc ?: null,
-                ':start_datetime'    => $start,
-                ':end_datetime'      => $end,
-                ':venue_id'          => $vid ?: null,
-                ':created_by_user_id'=> $userId ?: null,
+                ':committee_id'       => $cid,
+                ':title'              => $title,
+                ':description'        => $desc ?: null,
+                ':start_datetime'     => $start,
+                ':end_datetime'       => $end,
+                ':venue_id'           => $vid ?: null,
+                ':created_by_user_id' => $userId ?: null,
             ]);
             flash_set('success', 'Meeting scheduled successfully.');
         } else {
@@ -134,7 +252,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 }
 
-// -------- STATS --------
+// =========================================================
+//  STATS
+// =========================================================
 $counts = [
     'committees'   => 0,
     'meetings'     => 0,
@@ -152,10 +272,12 @@ try {
     $counts['venues'] = 0;
 }
 
-// Designations, committees, venues for dropdowns
-$designations = [];
-$commSelect   = [];
-$venueSelect  = [];
+// Dropdown data
+$designations    = [];
+$commSelect      = [];
+$venueSelect     = [];
+$allParticipants = [];
+$adminCandidates = [];
 
 try {
     $designations = $pdo->query("SELECT id, title FROM designations ORDER BY title ASC")
@@ -178,67 +300,59 @@ try {
     $venueSelect = [];
 }
 
-// Upcoming meetings
-// Upcoming meetings (role-aware)
+// For New Committee modal: all participants as potential initial members
+try {
+    $allParticipants = $pdo->query("
+        SELECT id, full_name
+        FROM participants
+        ORDER BY full_name ASC
+    ")->fetchAll(PDO::FETCH_ASSOC);
+} catch (Exception $e) {
+    $allParticipants = [];
+}
+
+// For New Committee modal: admin/nodal officer candidates (users)
+try {
+    $adminCandidates = $pdo->query("
+        SELECT id, username AS name, email
+        FROM users
+        WHERE role <> 'superuser'
+        ORDER BY username ASC
+    ")->fetchAll(PDO::FETCH_ASSOC);
+} catch (Exception $e) {
+    $adminCandidates = [];
+}
+
+// =========================================================
+//  UPCOMING MEETINGS (superadmin sees all)
+// =========================================================
 $upcoming = [];
 try {
-    $user = currentUser();
-    $isSuper = isSuperAdmin($user);
-
-    if ($isSuper) {
-        // Superadmin: all upcoming meetings
-        $sql = "
-            SELECT m.id, m.title, m.start_datetime, m.end_datetime,
-                   c.name AS committee_name,
-                   v.name AS venue_name
-            FROM meetings m
-            JOIN committees c ON m.committee_id = c.id
-            LEFT JOIN venues v ON m.venue_id = v.id
-            WHERE m.start_datetime >= NOW()
-            ORDER BY m.start_datetime ASC
-            LIMIT 5
-        ";
-        $stmt = $pdo->prepare($sql);
-        $stmt->execute();
-        $upcoming = $stmt->fetchAll(PDO::FETCH_ASSOC);
-
-    } else {
-        // Committee admin: only meetings of committees where he is admin
-        $committeeIds = getUserAdminCommitteeIds($pdo, $user);
-
-        if ($committeeIds) {
-            $placeholders = implode(',', array_fill(0, count($committeeIds), '?'));
-            $sql = "
-                SELECT m.id, m.title, m.start_datetime, m.end_datetime,
-                       c.name AS committee_name,
-                       v.name AS venue_name
-                FROM meetings m
-                JOIN committees c ON m.committee_id = c.id
-                LEFT JOIN venues v ON m.venue_id = v.id
-                WHERE m.committee_id IN ($placeholders)
-                  AND m.start_datetime >= NOW()
-                ORDER BY m.start_datetime ASC
-                LIMIT 5
-            ";
-            $stmt = $pdo->prepare($sql);
-            $stmt->execute($committeeIds);
-            $upcoming = $stmt->fetchAll(PDO::FETCH_ASSOC);
-        } else {
-            $upcoming = [];
-        }
-    }
+    $sql = "
+        SELECT m.id, m.title, m.start_datetime, m.end_datetime,
+               c.name AS committee_name,
+               v.name AS venue_name
+        FROM meetings m
+        JOIN committees c ON m.committee_id = c.id
+        LEFT JOIN venues v ON m.venue_id = v.id
+        WHERE m.start_datetime >= NOW()
+        ORDER BY m.start_datetime ASC
+        LIMIT 5
+    ";
+    $stmt = $pdo->prepare($sql);
+    $stmt->execute();
+    $upcoming = $stmt->fetchAll(PDO::FETCH_ASSOC);
 } catch (Exception $e) {
     $upcoming = [];
 }
-
 
 include __DIR__ . '/../header.php';
 ?>
 
 <div class="mb-4">
-  <div class="d-flex flex-wrap justify-content-between align-items-center">
+  <div class="d-flex flex-wrap align-items-center">
     <div>
-      <h2 class="mb-1">Meeting Management Dashboard</h2>
+      <h2 class="mb-1">Meeting Management Dashboard (Superadmin)</h2>
       <p class="text-muted mb-0">
         Welcome back,
         <strong><?= htmlspecialchars($user['username'] ?? 'User') ?></strong>
@@ -247,24 +361,30 @@ include __DIR__ . '/../header.php';
         </span>
       </p>
     </div>
-    <div class="mt-3 mt-md-0 d-flex flex-wrap gap-2">
+
+    <!-- Buttons block -->
+    <div class="mt-3 mt-md-0 d-flex gap-2 ms-auto">
       <button class="btn btn-success btn-rounded"
               data-bs-toggle="modal" data-bs-target="#modalScheduleMeeting">
         <i class="bi bi-calendar-plus me-1"></i> Schedule Meeting
       </button>
+
       <button class="btn btn-primary btn-rounded"
               data-bs-toggle="modal" data-bs-target="#modalNewCommittee">
         <i class="bi bi-diagram-3-fill me-1"></i> New Committee
       </button>
+
       <button class="btn btn-outline-dark btn-rounded"
               data-bs-toggle="modal" data-bs-target="#modalNewParticipant">
         <i class="bi bi-person-plus me-1"></i> Add Participant
       </button>
+
       <button class="btn btn-outline-secondary btn-rounded"
               data-bs-toggle="modal" data-bs-target="#modalNewVenue">
         <i class="bi bi-geo-alt-fill me-1"></i> Add Venue
       </button>
     </div>
+
   </div>
 </div>
 
@@ -436,7 +556,7 @@ include __DIR__ . '/../header.php';
 
 <!-- New Committee Modal -->
 <div class="modal fade" id="modalNewCommittee" tabindex="-1" aria-labelledby="modalNewCommitteeLabel" aria-hidden="true">
-  <div class="modal-dialog modal-dialog-centered">
+  <div class="modal-dialog modal-lg modal-dialog-centered">
     <div class="modal-content shadow-lg">
       <div class="modal-header">
         <h5 class="modal-title" id="modalNewCommitteeLabel">
@@ -447,19 +567,92 @@ include __DIR__ . '/../header.php';
       <form method="post">
         <div class="modal-body">
           <input type="hidden" name="quick_add_committee" value="1">
+          <input type="hidden" name="csrf" value="<?= csrf_token() ?>">
+
           <div class="mb-3">
             <label class="form-label">Committee Name <span class="text-danger">*</span></label>
             <input type="text" name="committee_name" class="form-control" required
                    placeholder="e.g. Finance Review Committee">
           </div>
+
           <div class="mb-3">
             <label class="form-label">Description</label>
             <textarea name="committee_description" class="form-control" rows="3"
                       placeholder="Short description of the committee’s purpose"></textarea>
           </div>
+
+          <!-- Members: searchable, add one-by-one -->
+          <div class="mb-3">
+            <label class="form-label">
+              Add Members (Participants)
+            </label>
+
+            <div class="input-group input-group-sm mb-2">
+              <span class="input-group-text">Search</span>
+              <input type="text"
+                     class="form-control"
+                     id="memberSearchInput"
+                     placeholder="Type to filter participants">
+            </div>
+
+            <div class="input-group input-group-sm mb-2">
+              <select id="memberSelect" class="form-select">
+                <option value="">-- Select participant --</option>
+                <?php foreach ($allParticipants as $p): ?>
+                  <option value="<?= (int)$p['id'] ?>">
+                    <?= htmlspecialchars($p['full_name']) ?>
+                  </option>
+                <?php endforeach; ?>
+              </select>
+              <button type="button" class="btn btn-outline-primary" id="addMemberBtn">
+                Add
+              </button>
+            </div>
+
+            <div id="selectedMembers" class="small">
+              <!-- Selected members badges + hidden inputs will appear here via JS -->
+            </div>
+
+            <div class="form-text small">
+              You can add multiple members one by one. These will be stored as committee members.
+            </div>
+          </div>
+
+          <!-- Admin / Nodal Officer: searchable dropdown -->
+          <div class="mb-3">
+            <label class="form-label">
+              Committee Admin / Nodal Officer (User)
+            </label>
+
+            <div class="input-group input-group-sm mb-2">
+              <span class="input-group-text">Search</span>
+              <input type="text"
+                     class="form-control"
+                     id="adminSearchInput"
+                     placeholder="Type to filter users">
+            </div>
+
+            <select name="admin_user_id" id="adminSelect" class="form-select form-select-sm">
+              <option value="">-- Select user (optional) --</option>
+              <?php foreach ($adminCandidates as $u): ?>
+                <option value="<?= (int)$u['id'] ?>">
+                  <?= htmlspecialchars($u['name']) ?>
+                  <?php if (!empty($u['email'])): ?>
+                    (<?= htmlspecialchars($u['email']) ?>)
+                  <?php endif; ?>
+                </option>
+              <?php endforeach; ?>
+            </select>
+
+            <div class="form-text small">
+              This user will be the committee head and will be able to manage meetings and members.
+            </div>
+          </div>
+
           <p class="text-muted small mb-0">
             The new committee will be visible under
-            <strong>Committees &raquo; List</strong>.
+            <strong>Committees &raquo; List</strong>. The selected nodal officer will manage this
+            committee from the Committee Admin Dashboard.
           </p>
         </div>
         <div class="modal-footer">
@@ -486,6 +679,8 @@ include __DIR__ . '/../header.php';
       <form method="post">
         <div class="modal-body">
           <input type="hidden" name="quick_add_participant" value="1">
+          <input type="hidden" name="csrf" value="<?= csrf_token() ?>">
+
           <div class="mb-3">
             <label class="form-label">Full Name <span class="text-danger">*</span></label>
             <input type="text" name="participant_name" class="form-control" required
@@ -545,6 +740,8 @@ include __DIR__ . '/../header.php';
       <form method="post">
         <div class="modal-body">
           <input type="hidden" name="quick_add_venue" value="1">
+          <input type="hidden" name="csrf" value="<?= csrf_token() ?>">
+
           <div class="mb-3">
             <label class="form-label">Venue Name <span class="text-danger">*</span></label>
             <input type="text" name="venue_name" class="form-control" required
@@ -593,6 +790,8 @@ include __DIR__ . '/../header.php';
       <form method="post">
         <div class="modal-body">
           <input type="hidden" name="quick_add_meeting" value="1">
+          <input type="hidden" name="csrf" value="<?= csrf_token() ?>">
+
           <div class="row g-3">
             <div class="col-md-8">
               <label class="form-label">Meeting Title <span class="text-danger">*</span></label>
@@ -653,5 +852,150 @@ include __DIR__ . '/../header.php';
     </div>
   </div>
 </div>
+
+<!-- Simple JS for search + add-one-by-one members/admin -->
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+  // ---- Member search + add one-by-one ----
+  const memberSearchInput = document.getElementById('memberSearchInput');
+  const memberSelect      = document.getElementById('memberSelect');
+  const addMemberBtn      = document.getElementById('addMemberBtn');
+  const selectedMembers   = document.getElementById('selectedMembers');
+
+  if (memberSearchInput && memberSelect && addMemberBtn && selectedMembers) {
+    // Filter participants in dropdown as user types
+    memberSearchInput.addEventListener('input', function () {
+      const query = this.value.toLowerCase();
+      Array.from(memberSelect.options).forEach(function (opt, idx) {
+        if (idx === 0) return; // skip placeholder
+        const text = opt.textContent.toLowerCase();
+        opt.hidden = query && !text.includes(query);
+      });
+    });
+
+    // Add selected participant to "Selected Members" list
+    addMemberBtn.addEventListener('click', function () {
+      const selectedOption = memberSelect.options[memberSelect.selectedIndex];
+      if (!selectedOption || !selectedOption.value) return;
+
+      const pid   = selectedOption.value;
+      const pname = selectedOption.textContent.trim();
+
+      // Avoid duplicates
+      if (selectedMembers.querySelector('[data-member-id="' + pid + '"]')) {
+        return;
+      }
+
+      const wrapper = document.createElement('div');
+      wrapper.className = 'badge bg-light text-dark border me-1 mb-1';
+      wrapper.dataset.memberId = pid;
+      wrapper.style.cursor = 'default';
+
+      const labelSpan = document.createElement('span');
+      labelSpan.textContent = pname + ' ';
+
+      const removeBtn = document.createElement('button');
+      removeBtn.type = 'button';
+      removeBtn.className = 'btn-close btn-close-sm ms-1';
+      removeBtn.setAttribute('aria-label', 'Remove');
+      removeBtn.style.fontSize = '0.6rem';
+
+      removeBtn.addEventListener('click', function () {
+        wrapper.remove();
+        // hidden input is inside wrapper, so will be removed too
+      });
+
+      const hiddenInput = document.createElement('input');
+      hiddenInput.type = 'hidden';
+      hiddenInput.name = 'member_ids[]';
+      hiddenInput.value = pid;
+
+      wrapper.appendChild(labelSpan);
+      wrapper.appendChild(removeBtn);
+      wrapper.appendChild(hiddenInput);
+      selectedMembers.appendChild(wrapper);
+    });
+  }
+
+  // ---- Admin search using API (no jQuery) ----
+  const adminSearchInput = document.getElementById('adminSearchInput');
+  const adminSelect      = document.getElementById('adminSelect');
+
+  if (adminSearchInput && adminSelect) {
+    adminSearchInput.addEventListener('input', function () {
+      const query = adminSearchInput.value.trim();
+
+      // Do nothing for very short queries
+      if (query.length < 2) {
+        return;
+      }
+
+      // Adjust the URL if your searchUsers.php is in a different folder
+      const url = 'searchUsers.php?q=' + encodeURIComponent(query);
+
+      fetch(url, {
+        method: 'GET',
+        headers: {
+          'Accept': 'application/json'
+        }
+      })
+      .then(function (response) {
+        if (!response.ok) {
+          throw new Error('Network response was not ok: ' + response.status);
+        }
+        console.log(response)
+        return response.json();
+      })
+      .then(function (data) {
+        if (!Array.isArray(data)) {
+          console.error('Response is not an array:', data);
+          return;
+        }
+
+        // Clear existing options and add default one
+        adminSelect.innerHTML = '';
+        const defaultOpt = document.createElement('option');
+        defaultOpt.value = '';
+        defaultOpt.textContent = '-- Select user (optional) --';
+        adminSelect.appendChild(defaultOpt);
+
+        if (data.length === 0) {
+          const noOpt = document.createElement('option');
+          noOpt.disabled = true;
+          noOpt.textContent = 'No users found';
+          adminSelect.appendChild(noOpt);
+          return;
+        }
+
+        data.forEach(function (user) {
+          // Make sure your API returns: id, rjcode (optional), display_name, email
+          const opt = document.createElement('option');
+          // opt.value = user.id;
+          opt.value = user.rjcode;
+
+
+          const labelParts = [];
+          if (user.rjcode) {
+            labelParts.push(user.rjcode);
+          }
+          if (user.display_name) {
+            labelParts.push(user.display_name);
+          }
+          let label = labelParts.join(' - ');
+          if (user.email) {
+            label += ' (' + user.email + ')';
+          }
+
+          opt.textContent = label || ('ID ' + user.id);
+          adminSelect.appendChild(opt);
+        });
+      })
+      .catch(function (error) {
+        console.error('Admin search fetch error:', error);
+      });
+    });
+  }
+});
+</script>
 
 <?php include __DIR__ . '/../footer.php'; ?>
