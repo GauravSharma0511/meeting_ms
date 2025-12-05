@@ -84,7 +84,7 @@ function isCommitteeAdmin(PDO $pdo, array $user = null): bool {
     return count(getUserAdminCommitteeIds($pdo, $user)) > 0;
 }
 
-function requireCommitteeAdminFor(PDO $pdo, int $committeeId, array $user = null): void {
+function requireCommitteeAdminFor(PDO $pdo, int $committeeId, array $user = null) {
     if ($user === null) {
         $user = currentUser();
     }
@@ -102,6 +102,7 @@ function requireCommitteeAdminFor(PDO $pdo, int $committeeId, array $user = null
         exit;
     }
 }
+
 
 
 

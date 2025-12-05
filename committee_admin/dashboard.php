@@ -143,7 +143,10 @@ $meetingStats     = [];   // [committee_id => ['count'=>.., 'next'=>row]]
 $upcomingMeetings = [];   // [committee_id => [rows...]]
 $committeeMembers = [];   // [committee_id => [members...]]
 
-$visibleIds = array_map(fn($c) => (int)$c['id'], $committees);
+$visibleIds = array_map(function($c) {
+    return (int)$c['id'];
+}, $committees);
+
 
 if ($visibleIds) {
     $ph = implode(',', array_fill(0, count($visibleIds), '?'));

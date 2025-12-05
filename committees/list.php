@@ -81,7 +81,10 @@ $committees = $pdo->query("
     ORDER BY c.name ASC
 ")->fetchAll(PDO::FETCH_ASSOC);
 
-$committeeIds = array_map(fn($c) => (int)$c['id'], $committees);
+$committeeIds = array_map(function($c) {
+    return (int)$c['id'];
+}, $committees);
+
 
 // ---------- Stats: meetings & members & next meeting ----------
 $meetingStats      = []; // [committee_id => ['count'=>.., 'next'=>row]]

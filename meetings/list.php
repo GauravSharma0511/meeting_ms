@@ -47,7 +47,6 @@ if ($isSuper) {
         $meetings = [];
     } else {
         $params = [];
-        $whereParts = [];
 
         // If URL filter is given, intersect it with allowed committees
         if ($committee_id > 0) {
@@ -93,12 +92,12 @@ include __DIR__ . '/../header.php';
   if ($committee_id > 0) {
       $addUrl .= '?committee_id=' . (int)$committee_id;
   }
-?>
-<?php if ($isSuper || isCommitteeAdmin($pdo, $user)): ?>
-  <a href="<?= htmlspecialchars($addUrl) ?>" class="btn btn-success">
-    <i class="bi bi-calendar-plus"></i> Schedule Meeting
-  </a>
-<?php endif; ?>
+  ?>
+  <?php if ($isSuper || isCommitteeAdmin($pdo, $user)): ?>
+    <a href="<?= htmlspecialchars($addUrl) ?>" class="btn btn-success">
+      <i class="bi bi-calendar-plus"></i> Schedule Meeting
+    </a>
+  <?php endif; ?>
 </div>
 
 <?php if ($msg = flash_get('success')): ?>
@@ -142,7 +141,27 @@ include __DIR__ . '/../header.php';
                 <a href="view.php?id=<?= (int)$m['id'] ?>" class="btn btn-sm btn-outline-secondary">
                   View
                 </a>
-                <!-- later: add Edit/Delete here with permission checks -->
+
+                <?php
+                  // Superadmin can edit/delete all
+                  // Committee admin only sees their own committees' meetings (because of the query),
+                  // so it's safe to let them edit/delete what they see.
+                  $canEditDelete = $isSuper || isCommitteeAdmin($pdo, $user);
+                ?>
+
+                <?php if ($canEditDelete): ?>
+                  <a href="edit.php?id=<?= (int)$m['id'] ?>" class="btn btn-sm btn-outline-primary">
+                    Edit
+                  </a>
+
+                  <form action="delete.php" method="post" class="d-inline"
+                        onsubmit="return confirm('Are you sure you want to delete this meeting?');">
+                    <input type="hidden" name="id" value="<?= (int)$m['id'] ?>">
+                    <button type="submit" class="btn btn-sm btn-outline-danger">
+                      Delete
+                    </button>
+                  </form>
+                <?php endif; ?>
               </td>
             </tr>
           <?php endforeach; ?>
