@@ -552,8 +552,6 @@ include __DIR__ . '/../header.php';
   </div>
 </div>
 
-<!-- ===================== MODALS ===================== -->
-
 <!-- New Committee Modal -->
 <div class="modal fade" id="modalNewCommittee" tabindex="-1" aria-labelledby="modalNewCommitteeLabel" aria-hidden="true">
   <div class="modal-dialog modal-lg modal-dialog-centered">
@@ -564,7 +562,9 @@ include __DIR__ . '/../header.php';
         </h5>
         <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
       </div>
-      <form method="post">
+
+      <!-- give form an id so JS can attach submit handler -->
+      <form method="post" id="new-committee-form">
         <div class="modal-body">
           <input type="hidden" name="quick_add_committee" value="1">
           <input type="hidden" name="csrf" value="<?= csrf_token() ?>">
@@ -581,45 +581,151 @@ include __DIR__ . '/../header.php';
                       placeholder="Short description of the committee’s purpose"></textarea>
           </div>
 
-          <!-- Members: searchable, add one-by-one -->
+          <!-- Members: via Designation + API / Manual (from view.php module) -->
           <div class="mb-3">
             <label class="form-label">
               Add Members (Participants)
             </label>
 
-            <div class="input-group input-group-sm mb-2">
-              <span class="input-group-text">Search</span>
-              <input type="text"
-                     class="form-control"
-                     id="memberSearchInput"
-                     placeholder="Type to filter participants">
-            </div>
+            <div class="row g-2">
 
-            <div class="input-group input-group-sm mb-2">
-              <select id="memberSelect" class="form-select">
-                <option value="">-- Select participant --</option>
-                <?php foreach ($allParticipants as $p): ?>
-                  <option value="<?= (int)$p['id'] ?>">
-                    <?= htmlspecialchars($p['full_name']) ?>
+              <!-- Step 1: Select Designation -->
+              <div class="col-12">
+                <label class="form-label small text-muted mb-1">Designation</label>
+                <select id="designation_select" class="form-select form-select-sm" required>
+                  <option value="">-- Select Designation --</option>
+                  <?php foreach ($designations as $d): 
+                      $title = $d['title'];
+                      $category = 'registry_officer'; // default
+
+                      if (in_array($title, $judgeTitles, true)) {
+                          $category = 'judge';
+                      } elseif (in_array($title, $advocateTitles, true)) {
+                          $category = 'advocate';
+                      } elseif (in_array($title, $govOfficerTitles, true)) {
+                          $category = 'gov_officer';
+                      }
+                  ?>
+                    <option
+                      value="<?= (int)$d['id'] ?>"
+                      data-title="<?= htmlspecialchars($title, ENT_QUOTES, 'UTF-8') ?>"
+                      data-category="<?= htmlspecialchars($category, ENT_QUOTES, 'UTF-8') ?>"
+                    >
+                      <?= htmlspecialchars($title) ?>
+                    </option>
+                  <?php endforeach; ?>
+
+                  <!-- Special option to add a completely new designation -->
+                  <option value="ADD_NEW" data-category="gov_officer">
+                    + Add new designation...
                   </option>
-                <?php endforeach; ?>
-              </select>
-              <button type="button" class="btn btn-outline-primary" id="addMemberBtn">
-                Add
-              </button>
+                </select>
+                <div class="form-text small">
+                  Judges (CJ / ACJ / Justice / Administrative Judge) use Judges API,
+                  registry staff use Registry API, Advocates & Government Officers use manual forms.
+                </div>
+              </div>
+
+              <!-- Section: API-based selection (Judges / Registry) -->
+              <div id="api-member-section" class="col-12" style="display:none;">
+                <div class="border rounded p-2 mb-2">
+                  <label class="form-label small text-muted mb-1">Search &amp; Select Person (from API)</label>
+                  <div class="input-group input-group-sm mb-2">
+                    <input type="text" id="api_search_query" class="form-control" placeholder="Type name / ID to search">
+                    <button class="btn btn-outline-secondary" type="button" id="api_search_button">
+                      <i class="bi bi-search"></i>
+                    </button>
+                  </div>
+                  <select id="api_result_select" class="form-select form-select-sm mb-2">
+                    <option value="">-- Search above and select a person --</option>
+                  </select>
+                  <div class="form-text small">
+                    For Judges (CJ/ACJ/Justice/Admin Judge) data comes from Judges API.
+                    For registry designations data comes from Registry API.
+                  </div>
+                </div>
+              </div>
+
+              <!-- Section: Advocate manual form -->
+              <div id="advocate-section" class="col-12" style="display:none;">
+                <div class="border rounded p-2 mb-2">
+                  <p class="small text-muted mb-2">
+                    Enter Advocate details.
+                  </p>
+                  <div class="mb-2">
+                    <label class="form-label small text-muted mb-1">Full Name</label>
+                    <input type="text" id="adv_full_name" class="form-control form-control-sm">
+                  </div>
+                  <div class="mb-2">
+                    <label class="form-label small text-muted mb-1">Designation</label>
+                    <input type="text" id="adv_designation" class="form-control form-control-sm" value="">
+                  </div>
+                  <div class="row g-2">
+                    <div class="col-6">
+                      <label class="form-label small text-muted mb-1">Mobile No.</label>
+                      <input type="text" id="adv_mobile" class="form-control form-control-sm">
+                    </div>
+                    <div class="col-6">
+                      <label class="form-label small text-muted mb-1">Email (optional)</label>
+                      <input type="email" id="adv_email" class="form-control form-control-sm">
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Section: Government Officer / New Designation manual form -->
+              <div id="gov-officer-section" class="col-12" style="display:none;">
+                <div class="border rounded p-2 mb-2">
+                  <p class="small text-muted mb-2" id="gov_form_caption">
+                    Enter details of the Government Officer.
+                  </p>
+                  <div class="mb-2">
+                    <label class="form-label small text-muted mb-1">Full Name</label>
+                    <input type="text" id="gov_full_name" class="form-control form-control-sm">
+                  </div>
+                  <div class="mb-2">
+                    <label class="form-label small text-muted mb-1">Designation (exact)</label>
+                    <input type="text" id="gov_designation" class="form-control form-control-sm" placeholder="e.g. Joint Secretary, Law Department">
+                  </div>
+                  <div class="mb-2">
+                    <label class="form-label small text-muted mb-1">Department</label>
+                    <input type="text" id="gov_department" class="form-control form-control-sm">
+                  </div>
+                  <div class="row g-2">
+                    <div class="col-6">
+                      <label class="form-label small text-muted mb-1">Mobile No.</label>
+                      <input type="text" id="gov_mobile" class="form-control form-control-sm">
+                    </div>
+                    <div class="col-6">
+                      <label class="form-label small text-muted mb-1">Email (optional)</label>
+                      <input type="email" id="gov_email" class="form-control form-control-sm">
+                    </div>
+                  </div>
+                  <div class="form-text small">
+                    Department is stored in the designation description for new designations.
+                  </div>
+                </div>
+              </div>
+
             </div>
 
-            <div id="selectedMembers" class="small">
-              <!-- Selected members badges + hidden inputs will appear here via JS -->
-            </div>
-
-            <div class="form-text small">
-              You can add multiple members one by one. These will be stored as committee members.
+            <div class="form-text small mt-1">
+              This will add one committee member using the same logic as Members » View.
             </div>
           </div>
 
+          <!-- HIDDEN FIELDS REQUIRED BY THE MEMBER MODULE -->
+          <input type="hidden" name="participant_type"        id="participant_type">
+          <input type="hidden" name="designation_title"       id="designation_title">
+          <input type="hidden" name="designation_description" id="designation_description">
+          <input type="hidden" name="external_source"         id="external_source">
+          <input type="hidden" name="external_id"             id="external_id">
+          <input type="hidden" name="full_name"               id="hidden_full_name">
+          <input type="hidden" name="email"                   id="hidden_email">
+          <input type="hidden" name="phone"                   id="hidden_phone">
+
           <!-- Admin / Nodal Officer: searchable dropdown -->
-          <div class="mb-3">
+          <div class="mb-3 mt-3">
             <label class="form-label">
               Committee Admin / Nodal Officer (User)
             </label>
@@ -655,6 +761,7 @@ include __DIR__ . '/../header.php';
             committee from the Committee Admin Dashboard.
           </p>
         </div>
+
         <div class="modal-footer">
           <button type="button" class="btn btn-light" data-bs-dismiss="modal">Cancel</button>
           <button type="submit" class="btn btn-primary">
@@ -856,146 +963,420 @@ include __DIR__ . '/../header.php';
 <!-- Simple JS for search + add-one-by-one members/admin -->
 <script>
 document.addEventListener('DOMContentLoaded', function () {
-  // ---- Member search + add one-by-one ----
-  const memberSearchInput = document.getElementById('memberSearchInput');
-  const memberSelect      = document.getElementById('memberSelect');
-  const addMemberBtn      = document.getElementById('addMemberBtn');
-  const selectedMembers   = document.getElementById('selectedMembers');
+    // ===================== ADMIN / NODAL OFFICER SEARCH =====================
+    const adminSearchInput = document.getElementById('adminSearchInput');
+    const adminSelect      = document.getElementById('adminSelect');
 
-  if (memberSearchInput && memberSelect && addMemberBtn && selectedMembers) {
-    // Filter participants in dropdown as user types
-    memberSearchInput.addEventListener('input', function () {
-      const query = this.value.toLowerCase();
-      Array.from(memberSelect.options).forEach(function (opt, idx) {
-        if (idx === 0) return; // skip placeholder
-        const text = opt.textContent.toLowerCase();
-        opt.hidden = query && !text.includes(query);
-      });
-    });
+    if (adminSearchInput && adminSelect) {
+        adminSearchInput.addEventListener('input', function () {
+            const query = adminSearchInput.value.trim();
 
-    // Add selected participant to "Selected Members" list
-    addMemberBtn.addEventListener('click', function () {
-      const selectedOption = memberSelect.options[memberSelect.selectedIndex];
-      if (!selectedOption || !selectedOption.value) return;
+            if (query.length < 2) {
+                return;
+            }
 
-      const pid   = selectedOption.value;
-      const pname = selectedOption.textContent.trim();
+            const url = 'searchUsers.php?q=' + encodeURIComponent(query);
 
-      // Avoid duplicates
-      if (selectedMembers.querySelector('[data-member-id="' + pid + '"]')) {
-        return;
-      }
+            fetch(url, {
+                method: 'GET',
+                headers: {
+                    'Accept': 'application/json'
+                }
+            })
+            .then(function (response) {
+                if (!response.ok) {
+                    throw new Error('Network response was not ok: ' + response.status);
+                }
+                return response.json();
+            })
+            .then(function (data) {
+                if (!Array.isArray(data)) {
+                    console.error('Response is not an array:', data);
+                    return;
+                }
 
-      const wrapper = document.createElement('div');
-      wrapper.className = 'badge bg-light text-dark border me-1 mb-1';
-      wrapper.dataset.memberId = pid;
-      wrapper.style.cursor = 'default';
+                adminSelect.innerHTML = '';
+                const defaultOpt = document.createElement('option');
+                defaultOpt.value = '';
+                defaultOpt.textContent = '-- Select user (optional) --';
+                adminSelect.appendChild(defaultOpt);
 
-      const labelSpan = document.createElement('span');
-      labelSpan.textContent = pname + ' ';
+                if (data.length === 0) {
+                    const noOpt = document.createElement('option');
+                    noOpt.disabled = true;
+                    noOpt.textContent = 'No users found';
+                    adminSelect.appendChild(noOpt);
+                    return;
+                }
 
-      const removeBtn = document.createElement('button');
-      removeBtn.type = 'button';
-      removeBtn.className = 'btn-close btn-close-sm ms-1';
-      removeBtn.setAttribute('aria-label', 'Remove');
-      removeBtn.style.fontSize = '0.6rem';
+                data.forEach(function (user) {
+                    const opt = document.createElement('option');
+                    opt.value = user.id; // admin is stored by internal user id
 
-      removeBtn.addEventListener('click', function () {
-        wrapper.remove();
-        // hidden input is inside wrapper, so will be removed too
-      });
+                    const labelParts = [];
+                    if (user.display_name) {
+                        labelParts.push(user.display_name);
+                    }
+                    if (user.email) {
+                        labelParts.push('(' + user.email + ')');
+                    }
 
-      const hiddenInput = document.createElement('input');
-      hiddenInput.type = 'hidden';
-      hiddenInput.name = 'member_ids[]';
-      hiddenInput.value = pid;
-
-      wrapper.appendChild(labelSpan);
-      wrapper.appendChild(removeBtn);
-      wrapper.appendChild(hiddenInput);
-      selectedMembers.appendChild(wrapper);
-    });
-  }
-
-  // ---- Admin search using API (no jQuery) ----
-  const adminSearchInput = document.getElementById('adminSearchInput');
-  const adminSelect      = document.getElementById('adminSelect');
-
-  if (adminSearchInput && adminSelect) {
-    adminSearchInput.addEventListener('input', function () {
-      const query = adminSearchInput.value.trim();
-
-      // Do nothing for very short queries
-      if (query.length < 2) {
-        return;
-      }
-
-      // Adjust the URL if your searchUsers.php is in a different folder
-      const url = 'searchUsers.php?q=' + encodeURIComponent(query);
-
-      fetch(url, {
-        method: 'GET',
-        headers: {
-          'Accept': 'application/json'
-        }
-      })
-      .then(function (response) {
-        if (!response.ok) {
-          throw new Error('Network response was not ok: ' + response.status);
-        }
-        console.log(response)
-        return response.json();
-      })
-      .then(function (data) {
-        if (!Array.isArray(data)) {
-          console.error('Response is not an array:', data);
-          return;
-        }
-
-        // Clear existing options and add default one
-        adminSelect.innerHTML = '';
-        const defaultOpt = document.createElement('option');
-        defaultOpt.value = '';
-        defaultOpt.textContent = '-- Select user (optional) --';
-        adminSelect.appendChild(defaultOpt);
-
-        if (data.length === 0) {
-          const noOpt = document.createElement('option');
-          noOpt.disabled = true;
-          noOpt.textContent = 'No users found';
-          adminSelect.appendChild(noOpt);
-          return;
-        }
-
-        data.forEach(function (user) {
-          // Make sure your API returns: id, rjcode (optional), display_name, email
-          const opt = document.createElement('option');
-          // opt.value = user.id;
-          opt.value = user.rjcode;
-
-
-          const labelParts = [];
-          if (user.rjcode) {
-            labelParts.push(user.rjcode);
-          }
-          if (user.display_name) {
-            labelParts.push(user.display_name);
-          }
-          let label = labelParts.join(' - ');
-          if (user.email) {
-            label += ' (' + user.email + ')';
-          }
-
-          opt.textContent = label || ('ID ' + user.id);
-          adminSelect.appendChild(opt);
+                    opt.textContent = labelParts.join(' ') || ('ID ' + user.id);
+                    adminSelect.appendChild(opt);
+                });
+            })
+            .catch(function (error) {
+                console.error('Admin search fetch error:', error);
+            });
         });
-      })
-      .catch(function (error) {
-        console.error('Admin search fetch error:', error);
-      });
-    });
-  }
+    }
+
+    // ===================== MEMBER MODULE FROM view.php =====================
+
+    var designationSelect       = document.getElementById('designation_select');
+
+    var apiSection              = document.getElementById('api-member-section');
+    var advSection              = document.getElementById('advocate-section');
+    var govSection              = document.getElementById('gov-officer-section');
+
+    var govFormCaption          = document.getElementById('gov_form_caption');
+
+    var participantTypeInput    = document.getElementById('participant_type');
+    var designationTitleInput   = document.getElementById('designation_title');
+    var designationDescInput    = document.getElementById('designation_description');
+    var externalSourceInput     = document.getElementById('external_source');
+    var externalIdInput         = document.getElementById('external_id');
+    var hiddenFullName          = document.getElementById('hidden_full_name');
+    var hiddenEmail             = document.getElementById('hidden_email');
+    var hiddenPhone             = document.getElementById('hidden_phone');
+
+    var apiSearchButton         = document.getElementById('api_search_button');
+    var apiSearchQuery          = document.getElementById('api_search_query');
+    var apiResultSelect         = document.getElementById('api_result_select');
+
+    var advFullName             = document.getElementById('adv_full_name');
+    var advDesignation          = document.getElementById('adv_designation');
+    var advMobile               = document.getElementById('adv_mobile');
+    var advEmail                = document.getElementById('adv_email');
+
+    var govFullName             = document.getElementById('gov_full_name');
+    var govDesignation          = document.getElementById('gov_designation');
+    var govDepartment           = document.getElementById('gov_department');
+    var govMobile               = document.getElementById('gov_mobile');
+    var govEmail                = document.getElementById('gov_email');
+
+    // This is your committee modal form
+    var addMemberForm           = document.getElementById('new-committee-form');
+
+    var currentApiUrl = null;
+
+    function resetHiddenFields() {
+        externalIdInput.value       = '';
+        hiddenFullName.value        = '';
+        hiddenEmail.value           = '';
+        hiddenPhone.value           = '';
+        designationTitleInput.value = '';
+        designationDescInput.value  = '';
+    }
+
+    function hideAllSections() {
+        if (apiSection) apiSection.style.display = 'none';
+        if (advSection) advSection.style.display = 'none';
+        if (govSection) govSection.style.display = 'none';
+    }
+
+    // When designation changes, decide which section to show
+    if (designationSelect) {
+        designationSelect.addEventListener('change', function() {
+            var value     = designationSelect.value;
+            var option    = designationSelect.options[designationSelect.selectedIndex];
+            var title     = option ? (option.getAttribute('data-title') || option.textContent || '') : '';
+            var category  = option ? (option.getAttribute('data-category') || '') : '';
+
+            resetHiddenFields();
+            hideAllSections();
+
+            if (!value) {
+                participantTypeInput.value = '';
+                externalSourceInput.value  = '';
+                currentApiUrl = null;
+                return;
+            }
+
+            // Add new designation path
+            if (value === 'ADD_NEW') {
+                participantTypeInput.value = 'gov_officer';
+                externalSourceInput.value  = 'MANUAL';
+                if (govSection) govSection.style.display = 'block';
+                if (govFormCaption) govFormCaption.textContent = 'Add new designation and person details.';
+                if (govDesignation) govDesignation.value = '';
+                if (govDepartment)  govDepartment.value  = '';
+                if (govFullName)    govFullName.value    = '';
+                if (govMobile)      govMobile.value      = '';
+                if (govEmail)       govEmail.value       = '';
+                return;
+            }
+
+            // Existing designations
+            if (!category) {
+                participantTypeInput.value = '';
+                externalSourceInput.value  = '';
+                currentApiUrl = null;
+                return;
+            }
+
+            if (category === 'judge') {
+                participantTypeInput.value = 'judge';
+                externalSourceInput.value  = 'JUDGES_API';
+                currentApiUrl              = '/mms/api/judges_search.php';
+                if (apiSection) apiSection.style.display = 'block';
+                designationTitleInput.value = title;
+            } else if (category === 'registry_officer') {
+                participantTypeInput.value = 'registry_officer';
+                externalSourceInput.value  = 'REGISTRY_API';
+                // same SSO user search used elsewhere
+                currentApiUrl              = '../admin/searchUsers.php';
+                if (apiSection) apiSection.style.display = 'block';
+                designationTitleInput.value = title;
+            } else if (category === 'advocate') {
+                participantTypeInput.value = 'advocate';
+                externalSourceInput.value  = 'MANUAL';
+                if (advSection) advSection.style.display = 'block';
+                if (advDesignation) advDesignation.value = title;
+                designationTitleInput.value = title;
+            } else if (category === 'gov_officer') {
+                participantTypeInput.value = 'gov_officer';
+                externalSourceInput.value  = 'MANUAL';
+                if (govSection) govSection.style.display = 'block';
+                if (govFormCaption) govFormCaption.textContent = 'Enter details of the Government Officer.';
+                if (govDesignation) govDesignation.value = '';
+                if (govDepartment)  govDepartment.value  = '';
+                if (govFullName)    govFullName.value    = '';
+                if (govMobile)      govMobile.value      = '';
+                if (govEmail)       govEmail.value       = '';
+            } else {
+                // default safety: treat as registry_officer
+                participantTypeInput.value = 'registry_officer';
+                externalSourceInput.value  = 'REGISTRY_API';
+                currentApiUrl              = '../admin/searchUsers.php';
+                if (apiSection) apiSection.style.display = 'block';
+                designationTitleInput.value = title;
+            }
+        });
+    }
+
+    // --- API search click (Judges / Registry via AJAX) ---
+    if (apiSearchButton && apiSearchQuery && apiResultSelect) {
+        apiSearchButton.addEventListener('click', function() {
+            if (!currentApiUrl) {
+                alert('No API configured for this designation.');
+                return;
+            }
+            var q = apiSearchQuery.value.trim();
+            if (!q || q.length < 2) {
+                alert('Please enter at least 2 characters to search.');
+                return;
+            }
+
+            var url = currentApiUrl + '?q=' + encodeURIComponent(q);
+
+            fetch(url, {
+                method: 'GET',
+                headers: { 'Accept': 'application/json' }
+            })
+            .then(function (response) {
+                if (!response.ok) {
+                    throw new Error('Network response was not ok: ' + response.status);
+                }
+                return response.json();
+            })
+            .then(function (data) {
+                var normalized;
+
+                if (!Array.isArray(data)) {
+                    console.error('Response is not an array:', data);
+                    return;
+                }
+
+                if (currentApiUrl.indexOf('searchUsers.php') !== -1) {
+                    // Normalize SSO user search to generic structure
+                    normalized = [];
+                    for (var i = 0; i < data.length; i++) {
+                        var u = data[i];
+                        normalized.push({
+                            id:          u.rjcode,
+                            name:        u.display_name || '',
+                            designation: designationTitleInput.value || '',
+                            email:       u.email || '',
+                            phone:       '',
+                            department:  ''
+                        });
+                    }
+                } else {
+                    // For future judges API that already returns generic objects
+                    normalized = data;
+                }
+
+                fillApiResults(normalized);
+            })
+            .catch(function (error) {
+                console.error('API search error:', error);
+                alert('Error while searching. Please try again.');
+            });
+        });
+    }
+
+    function fillApiResults(data) {
+        apiResultSelect.innerHTML = '';
+
+        var defaultOpt = document.createElement('option');
+        defaultOpt.value = '';
+        defaultOpt.text  = '-- Select a person --';
+        apiResultSelect.appendChild(defaultOpt);
+
+        for (var i = 0; i < data.length; i++) {
+            var item = data[i];
+            var opt  = document.createElement('option');
+            opt.value = item.id; // external_id from API
+
+            var label = item.name || 'Unknown';
+            if (item.designation) {
+                label += ' (' + item.designation + ')';
+            }
+            opt.text  = label;
+
+            if (item.name)       opt.setAttribute('data-name', item.name);
+            if (item.email)      opt.setAttribute('data-email', item.email);
+            if (item.phone)      opt.setAttribute('data-phone', item.phone);
+            if (item.designation)opt.setAttribute('data-designation', item.designation);
+            if (item.department) opt.setAttribute('data-department', item.department);
+
+            apiResultSelect.appendChild(opt);
+        }
+    }
+
+    // export in case you want it later
+    window.mmsFillApiResults = fillApiResults;
+
+    // When user selects an entry from API results, fill hidden fields
+    if (apiResultSelect) {
+        apiResultSelect.addEventListener('change', function() {
+            var selectedValue = apiResultSelect.value;
+            if (!selectedValue) {
+                externalIdInput.value      = '';
+                hiddenFullName.value       = '';
+                hiddenEmail.value          = '';
+                hiddenPhone.value          = '';
+                designationDescInput.value = '';
+                return;
+            }
+
+            var selectedOption = apiResultSelect.options[apiResultSelect.selectedIndex];
+
+            var name        = selectedOption.getAttribute('data-name') || '';
+            var email       = selectedOption.getAttribute('data-email') || '';
+            var phone       = selectedOption.getAttribute('data-phone') || '';
+            var desig       = selectedOption.getAttribute('data-designation') || '';
+            var department  = selectedOption.getAttribute('data-department') || '';
+
+            externalIdInput.value    = selectedValue;
+            hiddenFullName.value     = name;
+            hiddenEmail.value        = email;
+            hiddenPhone.value        = phone;
+
+            if (desig !== '') {
+                designationTitleInput.value = desig;
+            }
+
+            if (department !== '') {
+                designationDescInput.value = 'Department: ' + department;
+            } else {
+                designationDescInput.value = '';
+            }
+        });
+    }
+
+    // Submit validation for the committee create form
+    if (addMemberForm) {
+        addMemberForm.addEventListener('submit', function(e) {
+            var ptype = participantTypeInput.value;
+
+            if (!ptype) {
+                alert('Please select a designation first.');
+                e.preventDefault();
+                return;
+            }
+
+            // Judges / Registry via API
+            if (ptype === 'judge' || ptype === 'registry_officer') {
+                if (!externalIdInput.value) {
+                    alert('Please search and select a person from the API list.');
+                    e.preventDefault();
+                    return;
+                }
+                if (!hiddenFullName.value) {
+                    alert('Full name from API is missing. Integrate the API mapping first.');
+                    e.preventDefault();
+                    return;
+                }
+                if (!designationTitleInput.value) {
+                    designationTitleInput.value = (ptype === 'judge')
+                        ? "Hon'ble Mr./Ms. Justice"
+                        : 'Registrar';
+                }
+                return;
+            }
+
+            // Advocate manual
+            if (ptype === 'advocate') {
+                var name   = advFullName.value.trim();
+                var desig  = advDesignation.value.trim();
+                var mobile = advMobile.value.trim();
+                var email  = advEmail.value.trim();
+
+                if (!name || !mobile) {
+                    alert('Please fill Name and Mobile for Advocate.');
+                    e.preventDefault();
+                    return;
+                }
+
+                hiddenFullName.value        = name;
+                hiddenPhone.value           = mobile;
+                hiddenEmail.value           = email;
+                designationTitleInput.value = desig !== '' ? desig : 'Advocate';
+                designationDescInput.value  = '';
+                externalIdInput.value       = '';
+                externalSourceInput.value   = 'MANUAL';
+                return;
+            }
+
+            // Government Officer or Add New Designation (both use gov form)
+            if (ptype === 'gov_officer') {
+                var gname   = govFullName.value.trim();
+                var gdesig  = govDesignation.value.trim();
+                var gdept   = govDepartment.value.trim();
+                var gmobile = govMobile.value.trim();
+                var gemail  = govEmail.value.trim();
+
+                if (!gname || !gdesig || !gmobile) {
+                    alert('Please fill Name, Designation and Mobile.');
+                    e.preventDefault();
+                    return;
+                }
+
+                hiddenFullName.value        = gname;
+                hiddenPhone.value           = gmobile;
+                hiddenEmail.value           = gemail;
+                designationTitleInput.value = gdesig;
+                designationDescInput.value  = gdept !== '' ? ('Department: ' + gdept) : '';
+                externalIdInput.value       = '';
+                externalSourceInput.value   = 'MANUAL';
+                return;
+            }
+        });
+    }
 });
 </script>
+
 
 <?php include __DIR__ . '/../footer.php'; ?>
