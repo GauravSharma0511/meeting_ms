@@ -222,21 +222,22 @@ include __DIR__ . '/../header.php';
       <h2 class="mb-1">Committee Admin Dashboard</h2>
 
       <?php
-        $displayName = $user['full_name'] ?? $user['username'] ?? 'User';
-      ?>
+$fullName = !empty($user['full_name']) ? $user['full_name'] : 'Unknown User';
+$rjcode   = !empty($user['username'])   ? $user['username']   : '';
+?>
+<p class="text-muted mb-0">
+  Welcome,
+  <strong>
+    <?= htmlspecialchars($fullName) ?>
+    <?php if ($rjcode): ?>
+      (<?= htmlspecialchars($rjcode) ?>)
+    <?php endif; ?>
+  </strong>
+  – you are admin for
+  <strong><?= count($myCommitteeIds) ?></strong>
+  committee<?= count($myCommitteeIds) === 1 ? '' : 's' ?>.
+</p>
 
-      <p class="text-muted mb-0">
-        Welcome,
-        <strong>
-          <?= htmlspecialchars($displayName) ?>
-          <?php if (!empty($user['username'])): ?>
-            (<?= htmlspecialchars($user['username']) ?>)
-          <?php endif; ?>
-        </strong>
-        – you are admin for
-        <strong><?= count($myCommitteeIds) ?></strong>
-        committee<?= count($myCommitteeIds) === 1 ? '' : 's' ?>.
-      </p>
     </div>
 
     <!-- RIGHT SIDE (Toggle Buttons) -->

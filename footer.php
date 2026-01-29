@@ -1,6 +1,4 @@
-</div> <!-- .mms-page-container -->
-
-<!-- Use local Bootstrap JS, NOT CDN -->
+</div>
 <script src="/mms/assets/js/bootstrap.bundle.min.js"></script>
 </body>
 </html>

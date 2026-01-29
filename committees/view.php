@@ -134,7 +134,7 @@ include __DIR__ . '/../header.php';
                   <th style="width: 40px;">#</th>
                   <th>Name</th>
                   <th>Designation</th>
-                  <th style="width: 140px;">Member Type</th>
+                  <!-- <th style="width: 140px;">Member Type</th> -->
                   <th style="width: 120px;">Role</th>
                 </tr>
               </thead>
@@ -151,10 +151,10 @@ include __DIR__ . '/../header.php';
                       <?php endif; ?>
                     </td>
                     <td>
-                      <?php
+                      <!-- <?php
                         $ptype = isset($m['participant_type']) ? $m['participant_type'] : '';
                         if ($ptype === 'judge') {
-                            $ptypeLabel = 'Judge';
+                            $ptypeLabel = 'Justice';
                             $ptypeClass = 'bg-primary';
                         } elseif ($ptype === 'registry_officer') {
                             $ptypeLabel = 'Registrar Staff';
@@ -175,7 +175,7 @@ include __DIR__ . '/../header.php';
                       ?>
                       <span class="badge <?= $ptypeClass ?> small"><?= htmlspecialchars($ptypeLabel) ?></span>
                     </td>
-                    <td>
+                    <td> -->
                       <?php
                         $role = !empty($m['role_in_committee']) ? $m['role_in_committee'] : 'member';
                         $label = ucfirst($role);
@@ -456,7 +456,7 @@ document.addEventListener('DOMContentLoaded', function () {
             if (category === 'judge') {
                 participantTypeInput.value = 'judge';
                 externalSourceInput.value  = 'JUDGES_API';
-                currentApiUrl              = '/mms/api/judges_search.php'; // your future judges API
+                currentApiUrl              = '../admin/judges_Search.php'; // your future judges API
                 if (apiSection) apiSection.style.display = 'block';
                 designationTitleInput.value = title; // e.g. Hon'ble Mr./Ms. Justice
             } else if (category === 'registry_officer') {
@@ -518,6 +518,9 @@ document.addEventListener('DOMContentLoaded', function () {
                 headers: { 'Accept': 'application/json' }
             })
             .then(function (response) {
+
+
+             
                 if (!response.ok) {
                     throw new Error('Network response was not ok: ' + response.status);
                 }
@@ -545,11 +548,34 @@ document.addEventListener('DOMContentLoaded', function () {
                             department:  ''
                         });
                     }
-                } else {
+                }
+                 else if (currentApiUrl.indexOf('judges_Search.php') !== -1) {
+    normalized = [];
+    for (var i = 0; i < data.length; i++) {
+        var u = data[i];
+
+        // Build full name with salutation in front
+        var fullName = '';
+        if (u.salute) {
+            fullName += u.salute.trim() + ' ';
+        }
+        fullName += (u.judge_name || '').trim();
+
+        normalized.push({
+            id:          u.jocode,        // external_id
+            name:        fullName,        // e.g. "MR. SANJEEV PRAKASH SHARMA"
+            designation: '',              // DON'T put salute here
+            email:       '',              // stop abusing email for judge_code
+            phone:       '',
+            department:  ''
+        });
+    }
+}
+ else {
                     // For future judges API that already returns generic objects
                     normalized = data;
                 }
-
+        
                 fillApiResults(normalized);
             })
             .catch(function (error) {
@@ -573,9 +599,9 @@ document.addEventListener('DOMContentLoaded', function () {
             opt.value = item.id; // external_id from API
 
             var label = item.name || 'Unknown';
-            if (item.designation) {
-                label += ' (' + item.designation + ')';
-            }
+            // if (item.designation) {
+            //     label += ' (' + item.designation + ')';
+            // }
             opt.text  = label;
 
             if (item.name)       opt.setAttribute('data-name', item.name);

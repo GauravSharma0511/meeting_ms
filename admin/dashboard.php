@@ -1,5 +1,6 @@
 <?php
 // mms/admin/dashboard.php
+session_start();
 
 require_once __DIR__ . '/../lib/db.php';
 require_once __DIR__ . '/../lib/auth.php';
@@ -24,110 +25,308 @@ if (!isSuperAdmin($user)) {
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     // -------------- QUICK ADD COMMITTEE (WITH MEMBERS + ADMIN) --------------
-    if (isset($_POST['quick_add_committee'])) {
+//     if (isset($_POST['quick_add_committee'])) {
 
-        // Optional CSRF check if you have helpers
-        if (function_exists('csrf_token_is_valid')) {
-            if (!csrf_token_is_valid($_POST['csrf'] ?? '')) {
-                flash_set('error', 'Security token expired. Please try again.');
-                header('Location: /mms/admin/dashboard.php');
-                exit;
-            }
-        }
+//         // Optional CSRF check if you have helpers
+//         if (function_exists('csrf_token_is_valid')) {
+//             if (!csrf_token_is_valid($_POST['csrf'] ?? '')) {
+//                 flash_set('error', 'Security token expired. Please try again.');
+//                 header('Location: /mms/admin/dashboard.php');
+//                 exit;
+//             }
+//         }
 
-        $name        = trim($_POST['committee_name'] ?? '');
-        $desc        = trim($_POST['committee_description'] ?? '');
-        $memberIds   = array_map('intval', $_POST['member_ids'] ?? []); // participants
-        $adminUserId = (int)($_POST['admin_user_id'] ?? 0);             // users.id (nodal officer)
+//         $name        = trim($_POST['committee_name'] ?? '');
+//         $desc        = trim($_POST['committee_description'] ?? '');
+//         $memberIds   = array_map('intval', $_POST['member_ids'] ?? []); // participants
+//         $adminUserId = (int)($_POST['admin_user_id'] ?? 0);             // users.id (nodal officer)
 
-        if ($name === '') {
-            flash_set('error', 'Committee name is required.');
-            header('Location: /mms/admin/dashboard.php');
-            exit;
-        }
+//         if ($name === '') {
+//             flash_set('error', 'Committee name is required.');
+//             header('Location: /mms/admin/dashboard.php');
+//             exit;
+//         }
 
-        try {
-            $pdo->beginTransaction();
+//         try {
+//             $pdo->beginTransaction();
 
-            // Create committee
-            $stmt = $pdo->prepare("
-                INSERT INTO committees (name, description, created_by_user_id)
-                VALUES (:name, :description, :created_by)
-            ");
-            $stmt->execute([
-                ':name'        => $name,
-                ':description' => $desc !== '' ? $desc : null,
-                ':created_by'  => $userId ?: null,
-            ]);
+//             // Create committee
+//             $stmt = $pdo->prepare("
+//                 INSERT INTO committees (name, description, created_by_user_id)
+//                 VALUES (:name, :description, :created_by)
+//             ");
+//             $stmt->execute([
+//                 ':name'        => $name,
+//                 ':description' => $desc !== '' ? $desc : null,
+//                 ':created_by'  => $userId ?: null,
+//             ]);
 
-            // Get new committee ID (Postgres style; MySQL ignores the argument)
-            $committeeId = (int)$pdo->lastInsertId('committees_id_seq');
+//             // Get new committee ID (Postgres style; MySQL ignores the argument)
+//           // 1️⃣ Insert committee
+//             $committeeId = (int)$pdo->lastInsertId('committees_id_seq');
 
-            // Insert initial members (participants) as 'member'
-            if (!empty($memberIds)) {
-                $memStmt = $pdo->prepare("
-                    INSERT INTO committee_users (committee_id, participant_id, role_in_committee)
-                    VALUES (:cid, :pid, 'member')
-                ");
-                foreach ($memberIds as $pid) {
-                    if ($pid <= 0) continue;
-                    $memStmt->execute([
-                        ':cid' => $committeeId,
-                        ':pid' => $pid,
-                    ]);
-                }
-            }
+//             // // 2️⃣ Insert nodal officer as ADMIN (NO DESIGNATION)
+//             // if (!empty($_POST['admin_user_id'])) {
+//             //     $stmt = $pdo->prepare("
+//             //         INSERT INTO committee_users
+//             //         (committee_id, participant_id, role_in_committee)
+//             //         VALUES
+//             //         (:cid, :uid, 'admin')
+//             //     ");
+//             //     $stmt->execute([
+//             //         ':cid' => $committeeId,
+//             //         ':uid' => (int)$_POST['admin_user_id']
+//             //     ]);
+//             // }
 
-            // Assign initial committee admin / nodal officer
-            if ($adminUserId > 0) {
+//           // 3️⃣ Insert members as MEMBER (DESIGNATION-BASED)
+//           // 3️⃣ Insert members as MEMBER (via participants table)
+// if (!empty($_POST['members_json'])) {
+//     $members = json_decode($_POST['members_json'], true);
 
-                // Avoid duplicate admin entries (safe even if fresh committee)
-                $chk = $pdo->prepare("
-                    SELECT id FROM committee_admins
-                    WHERE committee_id = :cid AND user_id = :uid
-                    LIMIT 1
-                ");
-                $chk->execute([
-                    ':cid' => $committeeId,
-                    ':uid' => $adminUserId,
-                ]);
+//     if (is_array($members)) {
+// $checkStmt = $pdo->prepare("
+//     SELECT id
+// FROM participants
+// WHERE
+//     (CAST(:external_id AS text) IS NOT NULL AND external_id = CAST(:external_id AS text))
+//  OR (CAST(:external_id AS text) IS NULL AND CAST(:email AS text) IS NOT NULL AND email = CAST(:email AS text))
+//  OR (CAST(:external_id AS text) IS NULL AND CAST(:email AS text) IS NULL AND CAST(:phone AS text) IS NOT NULL AND phone = CAST(:phone AS text))
+// LIMIT 1;
 
-                if (!$chk->fetch()) {
-                    $admStmt = $pdo->prepare("
-                        INSERT INTO committee_admins (committee_id, user_id, assigned_at)
-                        VALUES (:cid, :uid, NOW())
-                    ");
-                    $admStmt->execute([
-                        ':cid' => $committeeId,
-                        ':uid' => $adminUserId,
-                    ]);
-                }
 
-                // OPTIONAL: auto-add admin as member if linked via participant_id
-                /*
-                $uStmt = $pdo->prepare("SELECT participant_id FROM users WHERE id = :id");
-                $uStmt->execute([':id' => $adminUserId]);
-                $uRow = $uStmt->fetch();
-                if (!empty($uRow['participant_id'])) {
-                    $pid = (int)$uRow['participant_id'];
-                    if ($pid > 0) {
-                        $memStmt->execute([':cid' => $committeeId, ':pid' => $pid]);
-                    }
-                }
-                */
-            }
+// ");
+//           // participant insert
+//         $pStmt = $pdo->prepare("
+//       INSERT INTO participants
+//           (full_name, email, phone, external_source, participant_type, external_id, designation_id, created_at)
+//       VALUES
+//           (:full_name, :email, :phone, :external_source, :participant_type, :external_id, :designation_id, NOW())
+//       RETURNING id
+//   ");
 
-            $pdo->commit();
-            flash_set('success', 'Committee created successfully with initial members and nodal officer.');
+//         // committee_users link
+//         $cuStmt = $pdo->prepare("
+//             INSERT INTO committee_users
+//             (committee_id, participant_id, role_in_committee)
+//             VALUES
+//             (:cid, :pid, 'member')
+//         ");
 
-        } catch (Exception $e) {
-            $pdo->rollBack();
-            flash_set('error', 'Error creating committee: ' . $e->getMessage());
-        }
+//         foreach ($members as $m) {
 
-        header('Location: /mms/admin/dashboard.php');
-        exit;
-    }
+//             if (empty($m['full_name'])) continue;
+//             $checkStmt->execute([
+//                 ':external_id' => $m['external_id'] ?? null,
+//                 ':email'       => $m['email'] ?? null,
+//                 ':phone'       => $m['phone'] ?? null,
+//             ]);
+//             $participantId = (int)$checkStmt->fetchColumn();
+//    if ($participantId <= 0) {
+
+//     $pStmt->execute([
+//         ':full_name'        => $m['full_name'],
+//         ':email'            => $m['email'] ?? null,
+//         ':phone'            => $m['phone'] ?? null,
+//         ':external_source'  => $m['external_source'] ?? '',
+//         ':participant_type' => $m['participant_type'] ?? null,
+//         ':external_id'      => $m['external_id'] ?? null,
+//         ':designation_id'   => $m['designation_id'] ?? null,
+//     ]);
+
+//     $participantId = (int)$pStmt->fetchColumn();
+// }
+//           //   // 1️⃣ insert participant
+//           //  $pStmt->execute([
+//           //       ':full_name'        => $m['full_name'],
+//           //       ':email'            => $m['email'] ?? null,
+//           //       ':phone'            => $m['phone'] ?? null,
+//           //       ':external_source'  => $m['external_source'] ?? '',
+//           //       ':participant_type' => $m['participant_type'] ?? null,
+//           //       ':external_id'      => $m['external_id'] ?? null,
+//           //       ':designation_id'   => $m['designation_id'] ?? null,
+//           //   ]);
+
+//           //   $participantId = (int)$pStmt->fetchColumn();
+
+//             if ($participantId <= 0) continue;
+
+//             // 2️⃣ link to committee
+//             $cuStmt->execute([
+//                 ':cid' => $committeeId,
+//                 ':pid' => $participantId
+//             ]);
+//         }
+//     }
+// }
+
+// // ===== ENSURE ADMIN USER HAS PARTICIPANT (MUST BE BEFORE ADMIN INSERTS) =====
+// if ($adminUserId > 0) {
+
+//     // get user info + participant link
+//     $uStmt = $pdo->prepare("
+//         SELECT participant_id, full_name, email
+//         FROM users
+//         WHERE id = :uid
+//     ");
+//     $uStmt->execute([':uid' => $adminUserId]);
+//     $uRow = $uStmt->fetch(PDO::FETCH_ASSOC);
+
+//     $participantId = (int)($uRow['participant_id'] ?? 0);
+
+//     // if participant not linked, create it
+//     if ($participantId <= 0) {
+
+//         $pStmt = $pdo->prepare("
+//             INSERT INTO participants
+//             (full_name, email, participant_type, external_source, external_id)
+//             VALUES
+//             (:full_name, :email, 'internal', 'users', :external_id)
+//             RETURNING id
+//         ");
+//         $pStmt->execute([
+//             ':full_name'   => $uRow['full_name'],
+//             ':email'       => $uRow['email'],
+//             ':external_id' => 'user:' . $adminUserId
+//         ]);
+
+//         $participantId = (int)$pStmt->fetchColumn();
+
+//         // link participant back to user
+//         $upd = $pdo->prepare("
+//             UPDATE users
+//             SET participant_id = :pid
+//             WHERE id = :uid
+//         ");
+//         $upd->execute([
+//             ':pid' => $participantId,
+//             ':uid' => $adminUserId
+//         ]);
+//     }
+// }
+
+
+
+//             // Insert initial members (participants) as 'member'
+//             // if (!empty($memberIds)) {
+//             //     $memStmt = $pdo->prepare("
+//             //         INSERT INTO committee_users (committee_id, participant_id, role_in_committee)
+//             //         VALUES (:cid, :pid, 'member')
+//             //     ");
+//             //     foreach ($memberIds as $pid) {
+//             //         if ($pid <= 0) continue;
+//             //         $memStmt->execute([
+//             //             ':cid' => $committeeId,
+//             //             ':pid' => $pid,
+//             //         ]);
+//             //     }
+//             // }
+
+//             // Assign initial committee admin / nodal officer
+//             // if ($adminUserId > 0) {
+
+//             //     // Avoid duplicate admin entries (safe even if fresh committee)
+//             //     $chk = $pdo->prepare("
+//             //         SELECT id FROM committee_admins
+//             //         WHERE committee_id = :cid AND user_id = :uid
+//             //         LIMIT 1
+//             //     ");
+//             //     $chk->execute([
+//             //         ':cid' => $committeeId,
+//             //         ':uid' => $adminUserId,
+//             //     ]);
+
+//             //     if (!$chk->fetch()) {
+//             //         $admStmt = $pdo->prepare("
+//             //             INSERT INTO committee_admins (committee_id, user_id, assigned_at)
+//             //             VALUES (:cid, :uid, NOW())
+//             //         ");
+//             //         $admStmt->execute([
+//             //             ':cid' => $committeeId,
+//             //             ':uid' => $adminUserId,
+//             //         ]);
+//             //     }
+
+//             //     // OPTIONAL: auto-add admin as member if linked via participant_id
+//             //     /*
+//             //     $uStmt = $pdo->prepare("SELECT participant_id FROM users WHERE id = :id");
+//             //     $uStmt->execute([':id' => $adminUserId]);
+//             //     $uRow = $uStmt->fetch();
+//             //     if (!empty($uRow['participant_id'])) {
+//             //         $pid = (int)$uRow['participant_id'];
+//             //         if ($pid > 0) {
+//             //             $memStmt->execute([':cid' => $committeeId, ':pid' => $pid]);
+//             //         }
+//             //     }
+//             //     */
+//             // }
+//             // 2️⃣ Insert nodal officer as ADMIN (via participant_id)
+// if ($adminUserId > 0) {
+
+//     // fetch participant_id linked to user
+//     $uStmt = $pdo->prepare("
+//         SELECT participant_id 
+//         FROM users 
+//         WHERE id = :uid
+//     ");
+//     $uStmt->execute([':uid' => $adminUserId]);
+//     $participantId = (int)$uStmt->fetchColumn();
+
+//     if ($participantId > 0) {
+//         $stmt = $pdo->prepare("
+//             INSERT INTO committee_users
+//             (committee_id, participant_id, role_in_committee)
+//             VALUES
+//             (:cid, :pid, 'admin')
+//         ");
+//         $stmt->execute([
+//             ':cid' => $committeeId,
+//             ':pid' => $participantId
+//         ]);
+//     }
+// }
+// // 3️⃣ ALSO INSERT INTO committee_admins (SOURCE OF TRUTH FOR ADMINS)
+// if ($adminUserId > 0) {
+
+//     $admCheck = $pdo->prepare("
+//         SELECT id
+//         FROM committee_admins
+//         WHERE committee_id = :cid
+//           AND user_id = :uid
+//         LIMIT 1
+//     ");
+//     $admCheck->execute([
+//         ':cid' => $committeeId,
+//         ':uid' => $adminUserId
+//     ]);
+
+//     if (!$admCheck->fetch()) {
+//         $admStmt = $pdo->prepare("
+//             INSERT INTO committee_admins
+//             (committee_id, user_id, assigned_at)
+//             VALUES
+//             (:cid, :uid, NOW())
+//         ");
+//         $admStmt->execute([
+//             ':cid' => $committeeId,
+//             ':uid' => $adminUserId
+//         ]);
+//     }
+// }
+
+
+
+//             $pdo->commit();
+//             flash_set('success', 'Committee created successfully with initial members and nodal officer.');
+
+//         } catch (Exception $e) {
+//             $pdo->rollBack();
+//             flash_set('error', 'Error creating committee: ' . $e->getMessage());
+//         }
+
+//         header('Location: /mms/admin/dashboard.php');
+//         exit;
+//     }
 
     // -------------- QUICK ADD PARTICIPANT --------------
     if (isset($_POST['quick_add_participant'])) {
@@ -345,10 +544,109 @@ try {
 } catch (Exception $e) {
     $upcoming = [];
 }
+// Load all designations for dropdown
+$designationStmt = $pdo->prepare("
+    SELECT id, title 
+    FROM designations
+    ORDER BY title
+");
+$designationStmt->execute();
+$designations = $designationStmt->fetchAll(PDO::FETCH_ASSOC);
+
+// Classification of designations
+$judgeTitles = array(
+    "Hon'ble the Chief Justice",
+    "Hon'ble the Acting Chief Justice",
+    "Hon'ble Mr./Ms. Justice",
+    "Hon'ble Administrative Judge"
+);
+
+$advocateTitles = array(
+    "Advocate",
+    "Senior Advocate",
+    "Government Advocate, Rajasthan High Court",
+    "Additional Advocate General, Rajasthan",
+    "Deputy Government Advocate",
+    "Public Prosecutor, High Court",
+    "Additional Public Prosecutor, High Court"
+);
+
+// Only this one will go to manual Gov Officer form
+$govOfficerTitles = array(
+    "Government Officer"
+);
+
 
 include __DIR__ . '/../header.php';
 ?>
+<style>
+/* Gradient stat cards */
+.stat-card {
+  color: #fff;
+  border-radius: 14px;
+  position: relative;
+  overflow: hidden;
+}
 
+.stat-card .text-muted {
+  color: rgba(255,255,255,0.8) !important;
+}
+
+.stat-card a {
+  color: rgba(255,255,255,0.9);
+}
+
+.stat-card a:hover {
+  color: #fff;
+  text-decoration: underline;
+}
+
+.stat-card::after {
+  content: '';
+  position: absolute;
+  right: -20px;
+  bottom: -20px;
+  width: 120px;
+  height: 120px;
+  background: rgba(255,255,255,0.12);
+  border-radius: 50%;
+}
+
+/* Individual themes */
+.card-committees {
+  background: linear-gradient(135deg, #4e54c8, #8f94fb);
+}
+
+.card-meetings {
+  background: linear-gradient(135deg, #11998e, #38ef7d);
+}
+
+.card-participants {
+  background: linear-gradient(135deg, #2193b0, #6dd5ed);
+}
+
+.card-venues {
+  background: linear-gradient(135deg, #f7971e, #ffd200);
+}
+</style>
+
+
+<body>
+ <script src="/mms/assets/js/committee-core.js"></script>
+ <script>
+document.addEventListener('DOMContentLoaded', function () {
+    initCommitteeModule({
+        formId: 'committeeForm',
+        addAsId: 'add_as',
+        memberTypeId: 'member_type',
+        designationId: 'designation_id',
+        searchInputId: 'search_query',
+        searchResultId: 'search_results',
+        addBtnId: 'addPersonBtn',
+        previewListId: 'previewList'
+    });
+});
+</script>
 <div class="mb-4">
   <div class="d-flex flex-wrap align-items-center">
     <div>
@@ -356,7 +654,6 @@ include __DIR__ . '/../header.php';
       <p class="text-muted mb-0">
         Welcome back,
         <strong><?= htmlspecialchars($user['username'] ?? 'User') ?></strong>
-        <span class="badge bg-secondary ms-2">
           <?= htmlspecialchars($user['role'] ?? 'user') ?>
         </span>
       </p>
@@ -397,12 +694,13 @@ include __DIR__ . '/../header.php';
 
 <!-- Stats cards -->
 <div class="row g-3 mb-4">
+
   <div class="col-sm-6 col-lg-3">
-    <div class="card shadow-sm border-0 h-100">
+    <div class="card stat-card card-committees shadow-sm border-0 h-100">
       <div class="card-body d-flex flex-column">
         <div class="d-flex justify-content-between align-items-center mb-2">
-          <span class="text-muted text-uppercase small">Committees</span>
-          <span class="text-primary"><i class="bi bi-diagram-3-fill fs-4"></i></span>
+          <span class="text-uppercase small">Committees</span>
+          <i class="bi bi-diagram-3-fill fs-3"></i>
         </div>
         <h3 class="fw-bold mb-3"><?= $counts['committees'] ?></h3>
         <a href="/mms/committees/list.php" class="mt-auto small text-decoration-none">
@@ -413,11 +711,11 @@ include __DIR__ . '/../header.php';
   </div>
 
   <div class="col-sm-6 col-lg-3">
-    <div class="card shadow-sm border-0 h-100">
+    <div class="card stat-card card-meetings shadow-sm border-0 h-100">
       <div class="card-body d-flex flex-column">
         <div class="d-flex justify-content-between align-items-center mb-2">
-          <span class="text-muted text-uppercase small">Meetings</span>
-          <span class="text-success"><i class="bi bi-calendar-check-fill fs-4"></i></span>
+          <span class="text-uppercase small">Meetings</span>
+          <i class="bi bi-calendar-check-fill fs-3"></i>
         </div>
         <h3 class="fw-bold mb-3"><?= $counts['meetings'] ?></h3>
         <a href="/mms/meetings/list.php" class="mt-auto small text-decoration-none">
@@ -428,11 +726,11 @@ include __DIR__ . '/../header.php';
   </div>
 
   <div class="col-sm-6 col-lg-3">
-    <div class="card shadow-sm border-0 h-100">
+    <div class="card stat-card card-participants shadow-sm border-0 h-100">
       <div class="card-body d-flex flex-column">
         <div class="d-flex justify-content-between align-items-center mb-2">
-          <span class="text-muted text-uppercase small">Participants</span>
-          <span class="text-info"><i class="bi bi-people-fill fs-4"></i></span>
+          <span class="text-uppercase small">Participants</span>
+          <i class="bi bi-people-fill fs-3"></i>
         </div>
         <h3 class="fw-bold mb-3"><?= $counts['participants'] ?></h3>
         <a href="/mms/participants/list.php" class="mt-auto small text-decoration-none">
@@ -443,11 +741,11 @@ include __DIR__ . '/../header.php';
   </div>
 
   <div class="col-sm-6 col-lg-3">
-    <div class="card shadow-sm border-0 h-100">
+    <div class="card stat-card card-venues shadow-sm border-0 h-100">
       <div class="card-body d-flex flex-column">
         <div class="d-flex justify-content-between align-items-center mb-2">
-          <span class="text-muted text-uppercase small">Venues</span>
-          <span class="text-warning"><i class="bi bi-geo-alt-fill fs-4"></i></span>
+          <span class="text-uppercase small">Venues</span>
+          <i class="bi bi-geo-alt-fill fs-3"></i>
         </div>
         <h3 class="fw-bold mb-3"><?= $counts['venues'] ?></h3>
         <a href="/mms/venues/list.php" class="mt-auto small text-decoration-none">
@@ -456,7 +754,9 @@ include __DIR__ . '/../header.php';
       </div>
     </div>
   </div>
+
 </div>
+
 
 <div class="row g-3">
   <!-- Upcoming meetings -->
@@ -552,226 +852,136 @@ include __DIR__ . '/../header.php';
   </div>
 </div>
 
-<!-- New Committee Modal -->
-<div class="modal fade" id="modalNewCommittee" tabindex="-1" aria-labelledby="modalNewCommitteeLabel" aria-hidden="true">
+
+ <!-- New Committee Modal-->
+<div class="modal fade" id="modalNewCommittee" tabindex="-1">
   <div class="modal-dialog modal-lg modal-dialog-centered">
-    <div class="modal-content shadow-lg">
-      <div class="modal-header">
-        <h5 class="modal-title" id="modalNewCommitteeLabel">
-          <i class="bi bi-diagram-3-fill me-1 text-primary"></i> New Committee
-        </h5>
-        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
-      </div>
+    <div class="modal-content">
 
-      <!-- give form an id so JS can attach submit handler -->
-      <form method="post" id="new-committee-form">
+      <form id="committeeForm" method="post" action="javascript:void(0);" >
+
+
+        <div class="modal-header">
+          <h5 class="modal-title">Create Committee</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+        </div>
+
         <div class="modal-body">
-          <input type="hidden" name="quick_add_committee" value="1">
-          <input type="hidden" name="csrf" value="<?= csrf_token() ?>">
 
+          <!-- CSRF -->
+          <input type="hidden" name="csrf" id="csrf" value="<?= csrf_token() ?>">
+
+          <!-- Committee Name -->
           <div class="mb-3">
-            <label class="form-label">Committee Name <span class="text-danger">*</span></label>
-            <input type="text" name="committee_name" class="form-control" required
-                   placeholder="e.g. Finance Review Committee">
+            <label class="form-label">Committee Name *</label>
+            <input type="text" id="committee_name"  class="form-control" required>
           </div>
 
+          <!-- Description -->
           <div class="mb-3">
-            <label class="form-label">Description</label>
-            <textarea name="committee_description" class="form-control" rows="3"
-                      placeholder="Short description of the committee’s purpose"></textarea>
+            <label class="form-label">Description *</label>
+            <textarea id="committee_description" name="committee_description" class="form-control" required></textarea>
           </div>
 
-          <!-- Members: via Designation + API / Manual (from view.php module) -->
-          <div class="mb-3">
-            <label class="form-label">
-              Add Members (Participants)
-            </label>
-
-            <div class="row g-2">
-
-              <!-- Step 1: Select Designation -->
-              <div class="col-12">
-                <label class="form-label small text-muted mb-1">Designation</label>
-                <select id="designation_select" class="form-select form-select-sm" required>
-                  <option value="">-- Select Designation --</option>
-                  <?php foreach ($designations as $d): 
-                      $title = $d['title'];
-                      $category = 'registry_officer'; // default
-
-                      if (in_array($title, $judgeTitles, true)) {
-                          $category = 'judge';
-                      } elseif (in_array($title, $advocateTitles, true)) {
-                          $category = 'advocate';
-                      } elseif (in_array($title, $govOfficerTitles, true)) {
-                          $category = 'gov_officer';
-                      }
-                  ?>
-                    <option
-                      value="<?= (int)$d['id'] ?>"
-                      data-title="<?= htmlspecialchars($title, ENT_QUOTES, 'UTF-8') ?>"
-                      data-category="<?= htmlspecialchars($category, ENT_QUOTES, 'UTF-8') ?>"
-                    >
-                      <?= htmlspecialchars($title) ?>
-                    </option>
-                  <?php endforeach; ?>
-
-                  <!-- Special option to add a completely new designation -->
-                  <option value="ADD_NEW" data-category="gov_officer">
-                    + Add new designation...
-                  </option>
-                </select>
-                <div class="form-text small">
-                  Judges (CJ / ACJ / Justice / Administrative Judge) use Judges API,
-                  registry staff use Registry API, Advocates & Government Officers use manual forms.
-                </div>
-              </div>
-
-              <!-- Section: API-based selection (Judges / Registry) -->
-              <div id="api-member-section" class="col-12" style="display:none;">
-                <div class="border rounded p-2 mb-2">
-                  <label class="form-label small text-muted mb-1">Search &amp; Select Person (from API)</label>
-                  <div class="input-group input-group-sm mb-2">
-                    <input type="text" id="api_search_query" class="form-control" placeholder="Type name / ID to search">
-                    <button class="btn btn-outline-secondary" type="button" id="api_search_button">
-                      <i class="bi bi-search"></i>
-                    </button>
-                  </div>
-                  <select id="api_result_select" class="form-select form-select-sm mb-2">
-                    <option value="">-- Search above and select a person --</option>
-                  </select>
-                  <div class="form-text small">
-                    For Judges (CJ/ACJ/Justice/Admin Judge) data comes from Judges API.
-                    For registry designations data comes from Registry API.
-                  </div>
-                </div>
-              </div>
-
-              <!-- Section: Advocate manual form -->
-              <div id="advocate-section" class="col-12" style="display:none;">
-                <div class="border rounded p-2 mb-2">
-                  <p class="small text-muted mb-2">
-                    Enter Advocate details.
-                  </p>
-                  <div class="mb-2">
-                    <label class="form-label small text-muted mb-1">Full Name</label>
-                    <input type="text" id="adv_full_name" class="form-control form-control-sm">
-                  </div>
-                  <div class="mb-2">
-                    <label class="form-label small text-muted mb-1">Designation</label>
-                    <input type="text" id="adv_designation" class="form-control form-control-sm" value="">
-                  </div>
-                  <div class="row g-2">
-                    <div class="col-6">
-                      <label class="form-label small text-muted mb-1">Mobile No.</label>
-                      <input type="text" id="adv_mobile" class="form-control form-control-sm">
-                    </div>
-                    <div class="col-6">
-                      <label class="form-label small text-muted mb-1">Email (optional)</label>
-                      <input type="email" id="adv_email" class="form-control form-control-sm">
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              <!-- Section: Government Officer / New Designation manual form -->
-              <div id="gov-officer-section" class="col-12" style="display:none;">
-                <div class="border rounded p-2 mb-2">
-                  <p class="small text-muted mb-2" id="gov_form_caption">
-                    Enter details of the Government Officer.
-                  </p>
-                  <div class="mb-2">
-                    <label class="form-label small text-muted mb-1">Full Name</label>
-                    <input type="text" id="gov_full_name" class="form-control form-control-sm">
-                  </div>
-                  <div class="mb-2">
-                    <label class="form-label small text-muted mb-1">Designation (exact)</label>
-                    <input type="text" id="gov_designation" class="form-control form-control-sm" placeholder="e.g. Joint Secretary, Law Department">
-                  </div>
-                  <div class="mb-2">
-                    <label class="form-label small text-muted mb-1">Department</label>
-                    <input type="text" id="gov_department" class="form-control form-control-sm">
-                  </div>
-                  <div class="row g-2">
-                    <div class="col-6">
-                      <label class="form-label small text-muted mb-1">Mobile No.</label>
-                      <input type="text" id="gov_mobile" class="form-control form-control-sm">
-                    </div>
-                    <div class="col-6">
-                      <label class="form-label small text-muted mb-1">Email (optional)</label>
-                      <input type="email" id="gov_email" class="form-control form-control-sm">
-                    </div>
-                  </div>
-                  <div class="form-text small">
-                    Department is stored in the designation description for new designations.
-                  </div>
-                </div>
-              </div>
-
-            </div>
-
-            <div class="form-text small mt-1">
-              This will add one committee member using the same logic as Members » View.
-            </div>
-          </div>
-
-          <!-- HIDDEN FIELDS REQUIRED BY THE MEMBER MODULE -->
-          <input type="hidden" name="participant_type"        id="participant_type">
-          <input type="hidden" name="designation_title"       id="designation_title">
-          <input type="hidden" name="designation_description" id="designation_description">
-          <input type="hidden" name="external_source"         id="external_source">
-          <input type="hidden" name="external_id"             id="external_id">
-          <input type="hidden" name="full_name"               id="hidden_full_name">
-          <input type="hidden" name="email"                   id="hidden_email">
-          <input type="hidden" name="phone"                   id="hidden_phone">
-
-          <!-- Admin / Nodal Officer: searchable dropdown -->
-          <div class="mb-3 mt-3">
-            <label class="form-label">
-              Committee Admin / Nodal Officer (User)
-            </label>
-
-            <div class="input-group input-group-sm mb-2">
-              <span class="input-group-text">Search</span>
-              <input type="text"
-                     class="form-control"
-                     id="adminSearchInput"
-                     placeholder="Type to filter users">
-            </div>
-
-            <select name="admin_user_id" id="adminSelect" class="form-select form-select-sm">
-              <option value="">-- Select user (optional) --</option>
-              <?php foreach ($adminCandidates as $u): ?>
-                <option value="<?= (int)$u['id'] ?>">
-                  <?= htmlspecialchars($u['name']) ?>
-                  <?php if (!empty($u['email'])): ?>
-                    (<?= htmlspecialchars($u['email']) ?>)
-                  <?php endif; ?>
+          <hr>
+          <!-- 🔥 COMMITTEE ADMIN (NEW – ADD THIS HERE) -->
+          <!-- <div class="mb-3">
+            <label class="form-label">Committee Admin *</label>
+            <select id="adminUserSelect" class="form-select" required>
+              <option value="">-- Select Admin --</option>
+              <?php foreach ($users as $u): ?>
+                <option value="<?= $u['id'] ?>">
+                  <?= htmlspecialchars($u['full_name']) ?>
                 </option>
               <?php endforeach; ?>
             </select>
+          </div> -->
 
-            <div class="form-text small">
-              This user will be the committee head and will be able to manage meetings and members.
+          <hr>
+
+          <!-- Add As -->
+          <div class="mb-3">
+            <label class="form-label">Add As *</label>
+            <select id="add_as" class="form-select">
+              <option value="">-- Select --</option>
+              <option value="member">Member</option>
+              <option value="admin">Nodal Officer</option>
+              <option value="admin">Chairperson</option>
+            </select>
+          </div>
+
+          <!-- Member Type -->
+          <div class="mb-3 d-none" id="memberTypeBox">
+            <label class="form-label">Member Type *</label>
+            <select id="member_type" class="form-select">
+              <option value="">-- Select --</option>
+              <option value="judge">Judge</option>
+              <option value="registry">Registry Officer</option>
+              <option value="advocate">Advocate</option>
+              <option value="govt">Government Officer</option>
+            </select>
+          </div>
+
+          <!-- Search -->
+          <div class="mb-3 d-none" id="searchBox">
+            <label class="form-label">Search Person</label>
+            <input type="text" id="search_query" class="form-control">
+            <select id="search_results" class="form-select mt-2"></select>
+          </div>
+
+          <!-- Manual -->
+          <div id="manualBox" class="d-none">
+            <div class="mb-2">
+              <label>Full Name *</label>
+              <input type="text" id="manual_name" class="form-control">
+            </div>
+            <div class="mb-2">
+              <label>Phone *</label>
+              <input type="text" id="manual_phone" class="form-control">
+            </div>
+            <div class="mb-2">
+              <label>Email</label>
+              <input type="email" id="manual_email" class="form-control">
+            </div>
+            <div class="mb-2 d-none" id="deptBox">
+              <label>Department *</label>
+              <input type="text" id="manual_department" class="form-control">
             </div>
           </div>
 
-          <p class="text-muted small mb-0">
-            The new committee will be visible under
-            <strong>Committees &raquo; List</strong>. The selected nodal officer will manage this
-            committee from the Committee Admin Dashboard.
-          </p>
+          <!-- Designation -->
+          <div class="mb-3">
+            <label class="form-label">Designation *</label>
+            <select id="designation_id" class="form-select">
+              <option value="">-- Select --</option>
+              <?php foreach ($designations as $d): ?>
+                <option value="<?= $d['id'] ?>"><?= htmlspecialchars($d['title']) ?></option>
+              <?php endforeach; ?>
+            </select>
+          </div>
+                <div id="memberError" class="text-danger mt-2" style="display:none;"></div>
+
+          <button type="button" id="addPersonBtn" class="btn btn-success btn-sm">
+            Add to Committee
+          </button>
+
+          <ul class="list-group mt-3" id="previewList"></ul>
+
         </div>
 
         <div class="modal-footer">
-          <button type="button" class="btn btn-light" data-bs-dismiss="modal">Cancel</button>
-          <button type="submit" class="btn btn-primary">
-            <i class="bi bi-check-lg me-1"></i> Create Committee
+          <button type ="submit" class="btn btn-primary">
+            Create Committee
           </button>
         </div>
+
       </form>
+
     </div>
   </div>
 </div>
+
+
 
 <!-- New Participant Modal -->
 <div class="modal fade" id="modalNewParticipant" tabindex="-1" aria-labelledby="modalNewParticipantLabel" aria-hidden="true">
@@ -962,421 +1172,561 @@ include __DIR__ . '/../header.php';
 
 <!-- Simple JS for search + add-one-by-one members/admin -->
 <script>
-document.addEventListener('DOMContentLoaded', function () {
-    // ===================== ADMIN / NODAL OFFICER SEARCH =====================
-    const adminSearchInput = document.getElementById('adminSearchInput');
-    const adminSelect      = document.getElementById('adminSelect');
+// document.addEventListener('DOMContentLoaded', function () {
 
-    if (adminSearchInput && adminSelect) {
-        adminSearchInput.addEventListener('input', function () {
-            const query = adminSearchInput.value.trim();
+//     var committeeMembers = [];
+//     // ===================== ADMIN / NODAL OFFICER SEARCH =====================
+//     const adminSearchInput = document.getElementById('adminSearchInput');
+//     const adminSelect      = document.getElementById('adminSelect');
 
-            if (query.length < 2) {
-                return;
-            }
+//     if (adminSearchInput && adminSelect) {
+//         adminSearchInput.addEventListener('input', function () {
+//             const query = adminSearchInput.value.trim();
 
-            const url = 'searchUsers.php?q=' + encodeURIComponent(query);
+//             if (query.length < 2) {
+//                 return;
+//             }
 
-            fetch(url, {
-                method: 'GET',
-                headers: {
-                    'Accept': 'application/json'
-                }
-            })
-            .then(function (response) {
-                if (!response.ok) {
-                    throw new Error('Network response was not ok: ' + response.status);
-                }
-                return response.json();
-            })
-            .then(function (data) {
-                if (!Array.isArray(data)) {
-                    console.error('Response is not an array:', data);
-                    return;
-                }
+//             const url = 'searchUsers.php?q=' + encodeURIComponent(query);
 
-                adminSelect.innerHTML = '';
-                const defaultOpt = document.createElement('option');
-                defaultOpt.value = '';
-                defaultOpt.textContent = '-- Select user (optional) --';
-                adminSelect.appendChild(defaultOpt);
+//             fetch(url, {
+//                 method: 'GET',
+//                 headers: {
+//                     'Accept': 'application/json'
+//                 }
+//             })
+//             .then(function (response) {
+//                 if (!response.ok) {
+//                     throw new Error('Network response was not ok: ' + response.status);
+//                 }
+//                 return response.json();
+//             })
+//             .then(function (data) {
+//                 if (!Array.isArray(data)) {
+//                     console.error('Response is not an array:', data);
+//                     return;
+//                 }
 
-                if (data.length === 0) {
-                    const noOpt = document.createElement('option');
-                    noOpt.disabled = true;
-                    noOpt.textContent = 'No users found';
-                    adminSelect.appendChild(noOpt);
-                    return;
-                }
+//                 adminSelect.innerHTML = '';
+//                 const defaultOpt = document.createElement('option');
+//                 defaultOpt.value = '';
+//                 defaultOpt.textContent = '-- Select user (optional) --';
+//                 adminSelect.appendChild(defaultOpt);
 
-                data.forEach(function (user) {
-                    const opt = document.createElement('option');
-                    opt.value = user.id; // admin is stored by internal user id
+//                 if (data.length === 0) {
+//                     const noOpt = document.createElement('option');
+//                     noOpt.disabled = true;
+//                     noOpt.textContent = 'No users found';
+//                     adminSelect.appendChild(noOpt);
+//                     return;
+//                 }
 
-                    const labelParts = [];
-                    if (user.display_name) {
-                        labelParts.push(user.display_name);
-                    }
-                    if (user.email) {
-                        labelParts.push('(' + user.email + ')');
-                    }
+//                 data.forEach(function (user) {
+//                     const opt = document.createElement('option');
+//                     opt.value = user.id; // admin is stored by internal user id
 
-                    opt.textContent = labelParts.join(' ') || ('ID ' + user.id);
-                    adminSelect.appendChild(opt);
-                });
-            })
-            .catch(function (error) {
-                console.error('Admin search fetch error:', error);
-            });
-        });
-    }
+//                     const labelParts = [];
+//                     if (user.display_name) {
+//                         labelParts.push(user.display_name);
+//                     }
+//                     if (user.email) {
+//                         labelParts.push('(' + user.email + ')');
+//                     }
 
-    // ===================== MEMBER MODULE FROM view.php =====================
+//                     opt.textContent = labelParts.join(' ') || ('ID ' + user.id);
+//                     adminSelect.appendChild(opt);
+//                 });
+//             })
+//             .catch(function (error) {
+//                 console.error('Admin search fetch error:', error);
+//             });
+//         });
+//     }
 
-    var designationSelect       = document.getElementById('designation_select');
+//     // ===================== MEMBER MODULE FROM view.php =====================
 
-    var apiSection              = document.getElementById('api-member-section');
-    var advSection              = document.getElementById('advocate-section');
-    var govSection              = document.getElementById('gov-officer-section');
+//     var designationSelect       = document.getElementById('designation_select');
 
-    var govFormCaption          = document.getElementById('gov_form_caption');
+//     var apiSection              = document.getElementById('api-member-section');
+//     var advSection              = document.getElementById('advocate-section');
+//     var govSection              = document.getElementById('gov-officer-section');
 
-    var participantTypeInput    = document.getElementById('participant_type');
-    var designationTitleInput   = document.getElementById('designation_title');
-    var designationDescInput    = document.getElementById('designation_description');
-    var externalSourceInput     = document.getElementById('external_source');
-    var externalIdInput         = document.getElementById('external_id');
-    var hiddenFullName          = document.getElementById('hidden_full_name');
-    var hiddenEmail             = document.getElementById('hidden_email');
-    var hiddenPhone             = document.getElementById('hidden_phone');
+//     var govFormCaption          = document.getElementById('gov_form_caption');
 
-    var apiSearchButton         = document.getElementById('api_search_button');
-    var apiSearchQuery          = document.getElementById('api_search_query');
-    var apiResultSelect         = document.getElementById('api_result_select');
+//     var participantTypeInput    = document.getElementById('participant_type');
+//     var designationTitleInput   = document.getElementById('designation_title');
+//     var designationDescInput    = document.getElementById('designation_description');
+//     var externalSourceInput     = document.getElementById('external_source');
+//     var externalIdInput         = document.getElementById('external_id');
+//     var hiddenFullName          = document.getElementById('hidden_full_name');
+//     var hiddenEmail             = document.getElementById('hidden_email');
+//     var hiddenPhone             = document.getElementById('hidden_phone');
 
-    var advFullName             = document.getElementById('adv_full_name');
-    var advDesignation          = document.getElementById('adv_designation');
-    var advMobile               = document.getElementById('adv_mobile');
-    var advEmail                = document.getElementById('adv_email');
+//     var apiSearchButton         = document.getElementById('api_search_button');
+//     var apiSearchQuery          = document.getElementById('api_search_query');
+//     var apiResultSelect         = document.getElementById('api_result_select');
 
-    var govFullName             = document.getElementById('gov_full_name');
-    var govDesignation          = document.getElementById('gov_designation');
-    var govDepartment           = document.getElementById('gov_department');
-    var govMobile               = document.getElementById('gov_mobile');
-    var govEmail                = document.getElementById('gov_email');
+//     var advFullName             = document.getElementById('adv_full_name');
+//     var advDesignation          = document.getElementById('adv_designation');
+//     var advMobile               = document.getElementById('adv_mobile');
+//     var advEmail                = document.getElementById('adv_email');
 
-    // This is your committee modal form
-    var addMemberForm           = document.getElementById('new-committee-form');
+//     var govFullName             = document.getElementById('gov_full_name');
+//     var govDesignation          = document.getElementById('gov_designation');
+//     var govDepartment           = document.getElementById('gov_department');
+//     var govMobile               = document.getElementById('gov_mobile');
+//     var govEmail                = document.getElementById('gov_email');
 
-    var currentApiUrl = null;
+//     // This is your committee modal form
+//     var addMemberForm           = document.getElementById('new-committee-form');
+//     var modalAddMemberBtn       = document.getElementById('modalAddMemberBtn');
+//     var addedMembersList = document.getElementById('addedMembersList');
 
-    function resetHiddenFields() {
-        externalIdInput.value       = '';
-        hiddenFullName.value        = '';
-        hiddenEmail.value           = '';
-        hiddenPhone.value           = '';
-        designationTitleInput.value = '';
-        designationDescInput.value  = '';
-    }
 
-    function hideAllSections() {
-        if (apiSection) apiSection.style.display = 'none';
-        if (advSection) advSection.style.display = 'none';
-        if (govSection) govSection.style.display = 'none';
-    }
+//     var currentApiUrl = null;
 
-    // When designation changes, decide which section to show
-    if (designationSelect) {
-        designationSelect.addEventListener('change', function() {
-            var value     = designationSelect.value;
-            var option    = designationSelect.options[designationSelect.selectedIndex];
-            var title     = option ? (option.getAttribute('data-title') || option.textContent || '') : '';
-            var category  = option ? (option.getAttribute('data-category') || '') : '';
+//     function resetHiddenFields() {
+//     externalIdInput.value       = '';
+//     hiddenFullName.value        = '';
+//     hiddenEmail.value           = '';
+//     hiddenPhone.value           = '';
+//     designationTitleInput.value = '';
+//     designationDescInput.value  = '';
+//     } 
 
-            resetHiddenFields();
-            hideAllSections();
+  
 
-            if (!value) {
-                participantTypeInput.value = '';
-                externalSourceInput.value  = '';
-                currentApiUrl = null;
-                return;
-            }
+//     function hideAllSections() {
+//         if (apiSection) apiSection.style.display = 'none';
+//         if (advSection) advSection.style.display = 'none';
+//         if (govSection) govSection.style.display = 'none';
+//     }
 
-            // Add new designation path
-            if (value === 'ADD_NEW') {
-                participantTypeInput.value = 'gov_officer';
-                externalSourceInput.value  = 'MANUAL';
-                if (govSection) govSection.style.display = 'block';
-                if (govFormCaption) govFormCaption.textContent = 'Add new designation and person details.';
-                if (govDesignation) govDesignation.value = '';
-                if (govDepartment)  govDepartment.value  = '';
-                if (govFullName)    govFullName.value    = '';
-                if (govMobile)      govMobile.value      = '';
-                if (govEmail)       govEmail.value       = '';
-                return;
-            }
+//     // When designation changes, decide which section to show
+//     if (designationSelect) {
+//      designationSelect.addEventListener('change', function() {
 
-            // Existing designations
-            if (!category) {
-                participantTypeInput.value = '';
-                externalSourceInput.value  = '';
-                currentApiUrl = null;
-                return;
-            }
+//             var value     = designationSelect.value;
+//             var option    = designationSelect.options[designationSelect.selectedIndex];
+//             var title     = option ? (option.getAttribute('data-title') || option.textContent || '') : '';
+//             var category  = option ? (option.getAttribute('data-category') || '') : '';
 
-            if (category === 'judge') {
-                participantTypeInput.value = 'judge';
-                externalSourceInput.value  = 'JUDGES_API';
-                currentApiUrl              = '/mms/api/judges_search.php';
-                if (apiSection) apiSection.style.display = 'block';
-                designationTitleInput.value = title;
-            } else if (category === 'registry_officer') {
-                participantTypeInput.value = 'registry_officer';
-                externalSourceInput.value  = 'REGISTRY_API';
-                // same SSO user search used elsewhere
-                currentApiUrl              = '../admin/searchUsers.php';
-                if (apiSection) apiSection.style.display = 'block';
-                designationTitleInput.value = title;
-            } else if (category === 'advocate') {
-                participantTypeInput.value = 'advocate';
-                externalSourceInput.value  = 'MANUAL';
-                if (advSection) advSection.style.display = 'block';
-                if (advDesignation) advDesignation.value = title;
-                designationTitleInput.value = title;
-            } else if (category === 'gov_officer') {
-                participantTypeInput.value = 'gov_officer';
-                externalSourceInput.value  = 'MANUAL';
-                if (govSection) govSection.style.display = 'block';
-                if (govFormCaption) govFormCaption.textContent = 'Enter details of the Government Officer.';
-                if (govDesignation) govDesignation.value = '';
-                if (govDepartment)  govDepartment.value  = '';
-                if (govFullName)    govFullName.value    = '';
-                if (govMobile)      govMobile.value      = '';
-                if (govEmail)       govEmail.value       = '';
-            } else {
-                // default safety: treat as registry_officer
-                participantTypeInput.value = 'registry_officer';
-                externalSourceInput.value  = 'REGISTRY_API';
-                currentApiUrl              = '../admin/searchUsers.php';
-                if (apiSection) apiSection.style.display = 'block';
-                designationTitleInput.value = title;
-            }
-        });
-    }
+//             resetHiddenFields();
+//             hideAllSections();
+          
+//             if (!value) {
+//                 participantTypeInput.value = '';
+//                 externalSourceInput.value  = '';
+//                 currentApiUrl = null;
+//                 if (modalAddMemberBtn) modalAddMemberBtn.style.display = 'none';
+//                 return;
+//             }
 
-    // --- API search click (Judges / Registry via AJAX) ---
-    if (apiSearchButton && apiSearchQuery && apiResultSelect) {
-        apiSearchButton.addEventListener('click', function() {
-            if (!currentApiUrl) {
-                alert('No API configured for this designation.');
-                return;
-            }
-            var q = apiSearchQuery.value.trim();
-            if (!q || q.length < 2) {
-                alert('Please enter at least 2 characters to search.');
-                return;
-            }
+//             // Add new designation path
+//             if (value === 'ADD_NEW') {
+//                 participantTypeInput.value = 'gov_officer';
+//                 externalSourceInput.value  = 'MANUAL';
+//                 if (govSection) govSection.style.display = 'block';
+//                 if (govFormCaption) govFormCaption.textContent = 'Add new designation and person details.';
+//                 if (govDesignation) govDesignation.value = '';
+//                 if (govDepartment)  govDepartment.value  = '';
+//                 if (govFullName)    govFullName.value    = '';
+//                 if (govMobile)      govMobile.value      = '';
+//                 if (govEmail)       govEmail.value       = '';
+//                 return;
+//             }
+            
 
-            var url = currentApiUrl + '?q=' + encodeURIComponent(q);
+//             // Existing designations
+//             if (!category) {
+//                 participantTypeInput.value = '';
+//                 externalSourceInput.value  = '';
+//                 currentApiUrl = null;
+//                 return;
+//             }
 
-            fetch(url, {
-                method: 'GET',
-                headers: { 'Accept': 'application/json' }
-            })
-            .then(function (response) {
-                if (!response.ok) {
-                    throw new Error('Network response was not ok: ' + response.status);
-                }
-                return response.json();
-            })
-            .then(function (data) {
-                var normalized;
+//             if (category === 'judge') {
+//                 participantTypeInput.value = 'judge';
+//                 externalSourceInput.value  = 'JUDGES_API';
+//                 currentApiUrl              = '../admin/judges_Search.php';
+//                 if (apiSection) apiSection.style.display = 'block';
+//                 if (modalAddMemberBtn) modalAddMemberBtn.style.display = 'inline-block';
+//                 designationTitleInput.value = title;
+//             } else if (category === 'registry_officer') {
+//                 participantTypeInput.value = 'registry_officer';
+//                 externalSourceInput.value  = 'REGISTRY_API';
+//                 // same SSO user search used elsewhere
+//                 currentApiUrl              = '../admin/searchUsers.php';
+//                 if (apiSection) apiSection.style.display = 'block';
+//                 if (modalAddMemberBtn) modalAddMemberBtn.style.display = 'inline-block';
+//                 designationTitleInput.value = title;
+//             } else if (category === 'advocate') {
+//                if (modalAddMemberBtn) modalAddMemberBtn.style.display = 'inline-block';
+//                 participantTypeInput.value = 'advocate';
+//                 externalSourceInput.value  = 'MANUAL';
+//                 if (advSection) advSection.style.display = 'block';
+//                 if (advDesignation) advDesignation.value = title;
+//                 designationTitleInput.value = title;
+//             } else if (category === 'gov_officer') {
+//                if (modalAddMemberBtn) modalAddMemberBtn.style.display = 'inline-block';
+//                 participantTypeInput.value = 'gov_officer';
+//                 externalSourceInput.value  = 'MANUAL';
+//                 if (govSection) govSection.style.display = 'block';
+//                 if (govFormCaption) govFormCaption.textContent = 'Enter details of the Government Officer.';
+//                 if (govDesignation) govDesignation.value = '';
+//                 if (govDepartment)  govDepartment.value  = '';
+//                 if (govFullName)    govFullName.value    = '';
+//                 if (govMobile)      govMobile.value      = '';
+//                 if (govEmail)       govEmail.value       = '';
+//             } else {
+//                 // default safety: treat as registry_officer
+//                 participantTypeInput.value = 'registry_officer';
+//                 externalSourceInput.value  = 'REGISTRY_API';
+//                 currentApiUrl              = '../admin/searchUsers.php';
+//                 if (apiSection) apiSection.style.display = 'block';
+//                 designationTitleInput.value = title;
+//             }
+//           })
 
-                if (!Array.isArray(data)) {
-                    console.error('Response is not an array:', data);
-                    return;
-                }
+    
+    
 
-                if (currentApiUrl.indexOf('searchUsers.php') !== -1) {
-                    // Normalize SSO user search to generic structure
-                    normalized = [];
-                    for (var i = 0; i < data.length; i++) {
-                        var u = data[i];
-                        normalized.push({
-                            id:          u.rjcode,
-                            name:        u.display_name || '',
-                            designation: designationTitleInput.value || '',
-                            email:       u.email || '',
-                            phone:       '',
-                            department:  ''
-                        });
-                    }
-                } else {
-                    // For future judges API that already returns generic objects
-                    normalized = data;
-                }
+//     // --- API search click (Judges / Registry via AJAX) ---
+//     if (apiSearchButton && apiSearchQuery && apiResultSelect) {
+//         apiSearchButton.addEventListener('click', function() {
+//             if (!currentApiUrl) {
+//                 alert('No API configured for this designation.');
+//                 return;
+//             }
+//             var q = apiSearchQuery.value.trim();
+//             if (!q || q.length < 2) {
+//                 alert('Please enter at least 2 characters to search.');
+//                 return;
+//             }
 
-                fillApiResults(normalized);
-            })
-            .catch(function (error) {
-                console.error('API search error:', error);
-                alert('Error while searching. Please try again.');
-            });
-        });
-    }
+//             var url = currentApiUrl + '?q=' + encodeURIComponent(q);
 
-    function fillApiResults(data) {
-        apiResultSelect.innerHTML = '';
+//             fetch(url, {
+//                 method: 'GET',
+//                 headers: { 'Accept': 'application/json' }
+//             })
+//             .then(function (response) {
+//                 if (!response.ok) {
+//                     throw new Error('Network response was not ok: ' + response.status);
+//                 }
+//                 return response.json();
+//             })
+//             .then(function (data) {
+//                 var normalized;
 
-        var defaultOpt = document.createElement('option');
-        defaultOpt.value = '';
-        defaultOpt.text  = '-- Select a person --';
-        apiResultSelect.appendChild(defaultOpt);
+//                 if (!Array.isArray(data)) {
+//                     console.error('Response is not an array:', data);
+//                     return;
+//                 }
 
-        for (var i = 0; i < data.length; i++) {
-            var item = data[i];
-            var opt  = document.createElement('option');
-            opt.value = item.id; // external_id from API
+//                 if (currentApiUrl.indexOf('searchUsers.php') !== -1) {
+//                     // Normalize SSO user search to generic structure
+//                     normalized = [];
+//                     for (var i = 0; i < data.length; i++) {
+//                         var u = data[i];
+//                         normalized.push({
+//                             id:          u.rjcode,
+//                             name:        u.display_name || '',
+//                             designation: designationTitleInput.value || '',
+//                             email:       u.email || '',
+//                             phone:       '',
+//                             department:  ''
+//                         });
+//                     }
+//                 } else if (currentApiUrl.indexOf('judges_Search.php') !== -1) {
+//                           normalized = [];
+//                           for (var i = 0; i < data.length; i++) {
+//                               var u = data[i];
 
-            var label = item.name || 'Unknown';
-            if (item.designation) {
-                label += ' (' + item.designation + ')';
-            }
-            opt.text  = label;
+//                               // Build full name with salutation in front
+//                               var fullName = '';
+//                               if (u.salute) {
+//                                   fullName += u.salute.trim() + ' ';
+//                               }
+//                               fullName += (u.judge_name || '').trim();
 
-            if (item.name)       opt.setAttribute('data-name', item.name);
-            if (item.email)      opt.setAttribute('data-email', item.email);
-            if (item.phone)      opt.setAttribute('data-phone', item.phone);
-            if (item.designation)opt.setAttribute('data-designation', item.designation);
-            if (item.department) opt.setAttribute('data-department', item.department);
+//                               normalized.push({
+//                                   id:          u.jocode,        // external_id
+//                                   name:        fullName,        // e.g. "MR. SANJEEV PRAKASH SHARMA"
+//                                   designation: '',              // DON'T put salute here
+//                                   email:       '',              // stop abusing email for judge_code
+//                                   phone:       '',
+//                                   department:  ''
+//                             });
+//         }}else {
+//                     // For future judges API that already returns generic objects
+//                     normalized = data;
+//                 }
 
-            apiResultSelect.appendChild(opt);
-        }
-    }
+//                 fillApiResults(normalized);
+//             })
+//             .catch(function (error) {
+//                 console.error('API search error:', error);
+//                 alert('Error while searching. Please try again.');
+//             });
+//         });
+//     }
+//   }
+//     function fillApiResults(data) {
+//         apiResultSelect.innerHTML = '';
 
-    // export in case you want it later
-    window.mmsFillApiResults = fillApiResults;
+//         var defaultOpt = document.createElement('option');
+//         defaultOpt.value = '';
+//         defaultOpt.text  = '-- Select a person --';
+//         apiResultSelect.appendChild(defaultOpt);
 
-    // When user selects an entry from API results, fill hidden fields
-    if (apiResultSelect) {
-        apiResultSelect.addEventListener('change', function() {
-            var selectedValue = apiResultSelect.value;
-            if (!selectedValue) {
-                externalIdInput.value      = '';
-                hiddenFullName.value       = '';
-                hiddenEmail.value          = '';
-                hiddenPhone.value          = '';
-                designationDescInput.value = '';
-                return;
-            }
+//         for (var i = 0; i < data.length; i++) {
+//             var item = data[i];
+//             var opt  = document.createElement('option');
+//             opt.value = item.id; // external_id from API
 
-            var selectedOption = apiResultSelect.options[apiResultSelect.selectedIndex];
+//             var label = item.name || 'Unknown';
+//             if (item.designation) {
+//                 // label += ' (' + item.designation + ')';
+//             }
+//             opt.text  = label;
 
-            var name        = selectedOption.getAttribute('data-name') || '';
-            var email       = selectedOption.getAttribute('data-email') || '';
-            var phone       = selectedOption.getAttribute('data-phone') || '';
-            var desig       = selectedOption.getAttribute('data-designation') || '';
-            var department  = selectedOption.getAttribute('data-department') || '';
+//             if (item.name)       opt.setAttribute('data-name', item.name);
+//             if (item.email)      opt.setAttribute('data-email', item.email);
+//             if (item.phone)      opt.setAttribute('data-phone', item.phone);
+//             if (item.designation)opt.setAttribute('data-designation', item.designation);
+//             if (item.department) opt.setAttribute('data-department', item.department);
 
-            externalIdInput.value    = selectedValue;
-            hiddenFullName.value     = name;
-            hiddenEmail.value        = email;
-            hiddenPhone.value        = phone;
+//             apiResultSelect.appendChild(opt);
+//         }
+//     }
 
-            if (desig !== '') {
-                designationTitleInput.value = desig;
-            }
+//     // export in case you want it later
+//     window.mmsFillApiResults = fillApiResults;
 
-            if (department !== '') {
-                designationDescInput.value = 'Department: ' + department;
-            } else {
-                designationDescInput.value = '';
-            }
-        });
-    }
+//     // When user selects an entry from API results, fill hidden fields
+//     if (apiResultSelect) {
+//         apiResultSelect.addEventListener('change', function() {
+// //           if (hiddenFullName.value) {
+// //             showAddMemberBtn();
+// // }
 
-    // Submit validation for the committee create form
-    if (addMemberForm) {
-        addMemberForm.addEventListener('submit', function(e) {
-            var ptype = participantTypeInput.value;
 
-            if (!ptype) {
-                alert('Please select a designation first.');
-                e.preventDefault();
-                return;
-            }
+//             var selectedValue = apiResultSelect.value;
+//             if (!selectedValue) {
+//                 externalIdInput.value      = '';
+//                 hiddenFullName.value       = '';
+//                 hiddenEmail.value          = '';
+//                 hiddenPhone.value          = '';
+//                 designationDescInput.value = '';
+//                 return;
+//             }
 
-            // Judges / Registry via API
-            if (ptype === 'judge' || ptype === 'registry_officer') {
-                if (!externalIdInput.value) {
-                    alert('Please search and select a person from the API list.');
-                    e.preventDefault();
-                    return;
-                }
-                if (!hiddenFullName.value) {
-                    alert('Full name from API is missing. Integrate the API mapping first.');
-                    e.preventDefault();
-                    return;
-                }
-                if (!designationTitleInput.value) {
-                    designationTitleInput.value = (ptype === 'judge')
-                        ? "Hon'ble Mr./Ms. Justice"
-                        : 'Registrar';
-                }
-                return;
-            }
+//             var selectedOption = apiResultSelect.options[apiResultSelect.selectedIndex];
 
-            // Advocate manual
-            if (ptype === 'advocate') {
-                var name   = advFullName.value.trim();
-                var desig  = advDesignation.value.trim();
-                var mobile = advMobile.value.trim();
-                var email  = advEmail.value.trim();
+//             var name        = selectedOption.getAttribute('data-name') || '';
+//             var email       = selectedOption.getAttribute('data-email') || '';
+//             var phone       = selectedOption.getAttribute('data-phone') || '';
+//             var desig       = selectedOption.getAttribute('data-designation') || '';
+//             var department  = selectedOption.getAttribute('data-department') || '';
 
-                if (!name || !mobile) {
-                    alert('Please fill Name and Mobile for Advocate.');
-                    e.preventDefault();
-                    return;
-                }
+//             externalIdInput.value    = selectedValue;
+//             hiddenFullName.value     = name;
+//             hiddenEmail.value        = email;
+//             hiddenPhone.value        = phone;
 
-                hiddenFullName.value        = name;
-                hiddenPhone.value           = mobile;
-                hiddenEmail.value           = email;
-                designationTitleInput.value = desig !== '' ? desig : 'Advocate';
-                designationDescInput.value  = '';
-                externalIdInput.value       = '';
-                externalSourceInput.value   = 'MANUAL';
-                return;
-            }
+//             if (desig !== '') {
+//                 designationTitleInput.value = desig;
+//             }
 
-            // Government Officer or Add New Designation (both use gov form)
-            if (ptype === 'gov_officer') {
-                var gname   = govFullName.value.trim();
-                var gdesig  = govDesignation.value.trim();
-                var gdept   = govDepartment.value.trim();
-                var gmobile = govMobile.value.trim();
-                var gemail  = govEmail.value.trim();
+//             if (department !== '') {
+//                 designationDescInput.value = 'Department: ' + department;
+//             } else {
+//                 designationDescInput.value = '';
+//             }
+//         });
+//     }
+//     // ===================== ADD MEMBER (NEW COMMITTEE) =====================
+// if (modalAddMemberBtn) {
+//     modalAddMemberBtn.addEventListener('click', function () {
 
-                if (!gname || !gdesig || !gmobile) {
-                    alert('Please fill Name, Designation and Mobile.');
-                    e.preventDefault();
-                    return;
-                }
+//         var ptype = participantTypeInput.value;
+//         if (!ptype) {
+//             alert('Please select a designation first.');
+//             return;
+//         }
 
-                hiddenFullName.value        = gname;
-                hiddenPhone.value           = gmobile;
-                hiddenEmail.value           = gemail;
-                designationTitleInput.value = gdesig;
-                designationDescInput.value  = gdept !== '' ? ('Department: ' + gdept) : '';
-                externalIdInput.value       = '';
-                externalSourceInput.value   = 'MANUAL';
-                return;
-            }
-        });
-    }
-});
+//         // Judges / Registry via API
+//         if (ptype === 'judge' || ptype === 'registry_officer') {
+//             if (!externalIdInput.value || !hiddenFullName.value) {
+//                 alert('Please search and select a person from the API.');
+//                 return;
+//             }
+//         }
+
+//         // Advocate
+//         if (ptype === 'advocate') {
+//             if (!advFullName.value.trim() || !advMobile.value.trim()) {
+//                 alert('Please fill Name and Mobile for Advocate.');
+//                 return;
+//             }
+
+//             hiddenFullName.value = advFullName.value.trim();
+//             hiddenPhone.value    = advMobile.value.trim();
+//             hiddenEmail.value    = advEmail.value.trim();
+//             designationTitleInput.value =
+//                 advDesignation.value.trim() || 'Advocate';
+//         }
+
+//         // Government Officer
+//         if (ptype === 'gov_officer') {
+//             if (
+//                 !govFullName.value.trim() ||
+//                 !govDesignation.value.trim() ||
+//                 !govMobile.value.trim()
+//             ) {
+//                 alert('Please fill Name, Designation and Mobile.');
+//                 return;
+//             }
+
+//             hiddenFullName.value = govFullName.value.trim();
+//             hiddenPhone.value    = govMobile.value.trim();
+//             hiddenEmail.value    = govEmail.value.trim();
+//             designationTitleInput.value = govDesignation.value.trim();
+//             designationDescInput.value =
+//                 govDepartment.value.trim()
+//                     ? ('Department: ' + govDepartment.value.trim())
+//                     : '';
+//         }
+
+//         // ✅ STORE MEMBER IN ARRAY
+//         committeeMembers.push({
+//             participant_type: participantTypeInput.value,
+//             designation_id: designationSelect.value,
+//             designation_title: designationTitleInput.value,
+//             designation_description: designationDescInput.value,
+//             full_name: hiddenFullName.value,
+//             email: hiddenEmail.value,
+//             phone: hiddenPhone.value,
+//             external_source: externalSourceInput.value,
+//             external_id: externalIdInput.value
+//         });
+//         // ===== SHOW ADDED MEMBER ON SCREEN =====
+//           if (addedMembersList) {
+//               var last = committeeMembers[committeeMembers.length - 1];
+
+//               var li = document.createElement('li');
+//               li.className = 'list-group-item d-flex justify-content-between align-items-center';
+
+//               li.innerHTML =
+//                   '<span>' +
+//                   last.full_name +
+//                   ' <small class="text-muted">(' +
+//                   last.designation_title +
+//                   ')</small></span>';
+
+//                 addedMembersList.appendChild(li);
+//           }
+
+//         // sync array to hidden input
+//         document.getElementById('members_json').value =
+//             JSON.stringify(committeeMembers);
+
+//         // reset UI
+//         resetHiddenFields();
+//         hideAllSections();
+//         designationSelect.value = '';
+
+//         alert('Member added.');
+//     });
+// }
+
+    
+
+//     // Submit validation for the committee create form
+//     if (addMemberForm) {
+      
+//             addMemberForm.addEventListener('submit', function (e) {
+//               if (committeeMembers.length === 0) {
+//                   alert('Please add at least one committee member.');
+//                   e.preventDefault();
+//                   return;
+//               }
+     
+
+//             // Judges / Registry via API
+//             if (ptype === 'judge' || ptype === 'registry_officer') {
+//                 if (!externalIdInput.value) {
+//                     alert('Please search and select a person from the API list.');
+//                     e.preventDefault();
+//                     return;
+//                 }
+//                 if (!hiddenFullName.value) {
+//                     alert('Full name from API is missing. Integrate the API mapping first.');
+//                     e.preventDefault();
+//                     return;
+//                 }
+//                 if (!designationTitleInput.value) {
+//                     designationTitleInput.value = (ptype === 'judge')
+//                         ? "Hon'ble Mr./Ms. Justice"
+//                         : 'Registrar';
+//                 }
+//                 return;
+//             }
+
+//             // Advocate manual
+//             if (ptype === 'advocate') {
+//                 var name   = advFullName.value.trim();
+//                 var desig  = advDesignation.value.trim();
+//                 var mobile = advMobile.value.trim();
+//                 var email  = advEmail.value.trim();
+
+//                 if (!name || !mobile) {
+//                     alert('Please fill Name and Mobile for Advocate.');
+//                     e.preventDefault();
+//                     return;
+//                 }
+
+//                 hiddenFullName.value        = name;
+//                 hiddenPhone.value           = mobile;
+//                 hiddenEmail.value           = email;
+//                 designationTitleInput.value = desig !== '' ? desig : 'Advocate';
+//                 designationDescInput.value  = '';
+//                 externalIdInput.value       = '';
+//                 externalSourceInput.value   = 'MANUAL';
+//                 return;
+//             }
+
+//             // Government Officer or Add New Designation (both use gov form)
+//             if (ptype === 'gov_officer') {
+//                 var gname   = govFullName.value.trim();
+//                 var gdesig  = govDesignation.value.trim();
+//                 var gdept   = govDepartment.value.trim();
+//                 var gmobile = govMobile.value.trim();
+//                 var gemail  = govEmail.value.trim();
+
+//                 if (!gname || !gdesig || !gmobile) {
+//                     alert('Please fill Name, Designation and Mobile.');
+//                     e.preventDefault();
+//                     return;
+//                 }
+
+//                 hiddenFullName.value        = gname;
+//                 hiddenPhone.value           = gmobile;
+//                 hiddenEmail.value           = gemail;
+//                 designationTitleInput.value = gdesig;
+//                 designationDescInput.value  = gdept !== '' ? ('Department: ' + gdept) : '';
+//                 externalIdInput.value       = '';
+//                 externalSourceInput.value   = 'MANUAL';
+//                 return;
+//             }
+//             }  )
+
+//         }
+//    });
+
 </script>
+          
 
 
 <?php include __DIR__ . '/../footer.php'; ?>

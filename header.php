@@ -51,12 +51,78 @@ if (!function_exists('str_contains_compat')) {
           href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css"> -->
           <link rel="stylesheet" href="/mms/assets/css/bootstrap.min.css">
           <link rel="stylesheet" href="/mms/assets/css/bootstrap-icons.css">
+          
 
 
     <style>
         body {
             background-color: #f5f6fa;
         }
+        /* ===== MMS Professional Navbar ===== */
+
+/* ===== MMS Professional Light Navbar ===== */
+
+.mms-navbar-light {
+  background-color: #ffc107;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.mms-navbar-light .navbar-brand {
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: #1f2937 !important;
+}
+
+.mms-navbar-light .nav-link {
+  color: #374151 !important;
+  font-weight: 500;
+  transition: color 0.2s ease;
+}
+
+.mms-navbar-light .nav-link:hover {
+  color: #4e54c8 !important;
+}
+
+.mms-navbar-light .nav-link.active {
+  color: #4e54c8 !important;
+  font-weight: 600;
+  position: relative;
+}
+
+.mms-navbar-light .nav-link.active::after {
+  content: '';
+  position: absolute;
+  left: 15%;
+  bottom: 4px;
+  width: 70%;
+  height: 2px;
+  background: linear-gradient(90deg, #4e54c8, #38ef7d);
+  border-radius: 2px;
+}
+
+/* Dropdown */
+.mms-navbar-light .dropdown-menu {
+  border-radius: 12px;
+  border: 1px solid #e5e7eb;
+  box-shadow: 0 10px 25px rgba(0,0,0,0.08);
+}
+
+/* User info */
+.mms-navbar-light .navbar-text {
+  color: #374151;
+}
+
+/* Logout button */
+.mms-navbar-light .btn-outline-light {
+  color: #374151;
+  border-color: #d1d5db;
+}
+
+.mms-navbar-light .btn-outline-light:hover {
+  background-color: #6a7998ff;
+}
+
+
         .navbar-brand {
             font-weight: 600;
             letter-spacing: 0.03em;
@@ -68,14 +134,49 @@ if (!function_exists('str_contains_compat')) {
             padding-top: 1.5rem;
             padding-bottom: 1.5rem;
         }
+        /* ===============================
+   FULL WIDTH PROFESSIONAL LAYOUT
+   =============================== */
+
+.page-committee-add {
+    padding-left: 0;
+    padding-right: 0;
+}
+
+/* Control inner width */
+.page-committee-add .row {
+    margin-left: 0;
+    margin-right: 0;
+}
+
+/* Center card with max width */
+.page-committee-add .col-xl-10 {
+    max-width: 1400px;   /* professional dashboard width */
+}
+
+/* Card polish */
+.page-committee-add .card {
+    border-radius: 12px;
+}
+
+/* Better spacing on large screens */
+@media (min-width: 1400px) {
+    .page-committee-add .card-body {
+        padding: 2.5rem 3rem;
+    }
+}
+
     </style>
 </head>
 <body>
 
-<nav class="navbar navbar-expand-lg navbar-dark bg-dark shadow-sm">
+<nav class="navbar navbar-expand-lg mms-navbar-light shadow-sm">
+
+
   <div class="container-fluid">
     <a class="navbar-brand" href="<?php echo $isSuper ? '/mms/admin/dashboard.php' : '/mms/committee_admin/dashboard.php'; ?>">
-      <i class="bi bi-calendar-check me-1"></i> MMS
+      <i class="bi bi-calendar-check-fill me-1 text-info"></i> MMS
+
     </a>
 
     <button class="navbar-toggler" type="button" data-bs-toggle="collapse"
@@ -160,12 +261,12 @@ if (!function_exists('str_contains_compat')) {
             </a>
           </li>
 
-          <li class="nav-item">
+          <!-- <li class="nav-item">
             <a class="nav-link <?php echo str_contains_compat($currentUri, '/venues/') ? 'active' : ''; ?>"
                href="/mms/venues/list.php">
               <i class="bi bi-geo-alt me-1"></i> My Venues
             </a>
-          </li>
+          </li> -->
 
         <?php else: ?>
           <!-- GUEST OR BASIC USER -->
@@ -184,9 +285,9 @@ if (!function_exists('str_contains_compat')) {
           <li class="nav-item me-2">
             <span class="navbar-text text-light small">
               <i class="bi bi-person-circle me-1"></i>
-              <?= htmlspecialchars($user['username'] ?? 'User') ?>
+              <?= htmlspecialchars($user['full_name'] ?? 'User') ?>
               <span class="text-muted">
-                (<?= htmlspecialchars($user['role'] ?? '') ?>)
+                (<?= htmlspecialchars($user['username'] ?? '') ?>)
               </span>
             </span>
           </li>
